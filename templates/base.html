@@ -84,6 +84,45 @@
     <!-- Pipeline modal (compartilhado) -->
     {% include "partials/pipeline_modal.html" %}
 
+    <!-- Modal de Resumo (global — funciona em qualquer pagina) -->
+    <dialog id="resumo-modal" class="modal">
+        <div class="modal-box w-11/12 max-w-4xl">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-bold text-lg">
+                    Resumo da elaboracao — PAJ <span id="resumo-paj-label" class="font-mono"></span>
+                </h3>
+                <div class="flex gap-2">
+                    <a id="resumo-abrir-paj" href="#" class="btn btn-sm btn-ghost">Abrir PAJ</a>
+                    <form method="dialog"><button class="btn btn-sm btn-ghost">X</button></form>
+                </div>
+            </div>
+
+            <!-- Conteudo (preenchido via JS) -->
+            <div id="resumo-content" class="prose prose-sm prose-invert max-w-none whitespace-pre-wrap text-sm bg-base-300 p-4 rounded-lg max-h-[60vh] overflow-y-auto mb-4"></div>
+
+            <!-- Discordar / Corrigir -->
+            <div class="collapse collapse-arrow bg-base-200 border border-base-300">
+                <input type="checkbox" id="discordar-toggle" />
+                <div class="collapse-title text-sm font-semibold">
+                    Discordar ou pedir correcao
+                </div>
+                <div class="collapse-content">
+                    <textarea id="correcao-text"
+                              class="textarea textarea-bordered w-full text-sm"
+                              rows="4"
+                              placeholder="Ex: Na verdade cabem embargos de declaracao porque houve omissao sobre X. Refaca como ED."></textarea>
+                    <div class="flex justify-end gap-2 mt-2">
+                        <button class="btn btn-sm btn-primary"
+                                onclick="enviarCorrecaoAtual()">
+                            Enviar correcao e refazer
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <form method="dialog" class="modal-backdrop"><button>fechar</button></form>
+    </dialog>
+
     <script src="/static/js/app.js"></script>
     {% block scripts %}{% endblock %}
 </body>

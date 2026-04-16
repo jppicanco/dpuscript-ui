@@ -64,41 +64,7 @@
     </template>
 </div>
 
-<!-- Modal de Resumo -->
-<dialog id="resumo-modal" class="modal">
-    <div class="modal-box w-11/12 max-w-4xl">
-        <div class="flex items-center justify-between mb-4">
-            <h3 class="font-bold text-lg">Resumo da elaboracao — PAJ {{ meta.paj }}</h3>
-            <form method="dialog">
-                <button class="btn btn-sm btn-ghost">X</button>
-            </form>
-        </div>
-
-        <!-- Conteudo do resumo (renderizado do texto do Claude) -->
-        <div id="resumo-content" class="prose prose-sm prose-invert max-w-none whitespace-pre-wrap text-sm bg-base-300 p-4 rounded-lg max-h-[60vh] overflow-y-auto mb-4"></div>
-
-        <!-- Discordar / Corrigir -->
-        <div class="collapse collapse-arrow bg-base-200 border border-base-300">
-            <input type="checkbox" id="discordar-toggle" />
-            <div class="collapse-title text-sm font-semibold">
-                Discordar ou pedir correcao
-            </div>
-            <div class="collapse-content">
-                <textarea id="correcao-text"
-                          class="textarea textarea-bordered w-full text-sm"
-                          rows="4"
-                          placeholder="Ex: Na verdade cabem embargos de declaracao porque houve omissao sobre X. Refaca como ED."></textarea>
-                <div class="flex justify-end gap-2 mt-2">
-                    <button class="btn btn-sm btn-primary"
-                            onclick="enviarCorrecao('{{ paj_norm }}')">
-                        Enviar correcao e refazer
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-    <form method="dialog" class="modal-backdrop"><button>fechar</button></form>
-</dialog>
+<!-- Modal de resumo global (definido em base.html) -->
 
 <!-- Info cards -->
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">

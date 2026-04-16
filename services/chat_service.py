@@ -64,32 +64,39 @@ class ChatSession:
 
             # Envia PROMPT_MAX como prompt direto (texto, nao JSON)
             prompt_content = prompt_path.read_text(encoding="utf-8", errors="replace")
+            paj_pasta = ENTRADA_DIR / self.paj_norm
             instrucao = (
-                "Analise o PAJ abaixo conforme as instrucoes do CLAUDE.md deste workspace e "
-                "**decida autonomamente** entre uma das tres opcoes possiveis:\n\n"
-                "1. **Despacho de mero expediente** — quando nao ha prazo nem decisao a atacar "
-                "(ex: vista ao MPF, aguardando distribuicao, intimacao simples sem demanda ativa).\n"
-                "2. **Arquivamento** — quando houver transito em julgado, perda de objeto ou inviabilidade recursal.\n"
-                "3. **Recurso** — quando houver decisao desfavoravel ao assistido com recurso cabivel e viavel.\n\n"
-                "**NAO me pergunte nada.** Use seu melhor julgamento com base na analise tecnica (CLAUDE.md, "
-                "skills de triagem, pesquisa-juridica, etc). Execute a acao escolhida integralmente: "
-                "elabore a peca, valide contra alucinacoes (skill validacao), formate em DOCX/PDF (formatar_peca.py) "
-                "e copie pra subpasta de entrada do processo. Tudo sem me consultar.\n\n"
-                "Ao final, me apresente um **RESUMO ESTRUTURADO** seguindo exatamente este formato:\n\n"
+                "Analise o PAJ abaixo e **decida autonomamente** (sem me perguntar) "
+                "entre uma das tres opcoes:\n\n"
+                "1. **DESPACHO de mero expediente** — vista ao MPF, aguardando distribuicao, "
+                "intimacao simples sem demanda ativa.\n"
+                "2. **ARQUIVAMENTO** — transito em julgado, perda de objeto ou inviabilidade recursal.\n"
+                "3. **RECURSO** — decisao desfavoravel com recurso cabivel e viavel.\n\n"
+                "**OBRIGATORIO em TODOS os casos**: produzir o TEXTO da peca/despacho, em linguagem "
+                "juridica apropriada, pronto pra Joao colar no SISDPU. Nao basta dizer 'e mero expediente' — "
+                "redija o despacho mesmo que tenha 3 linhas (ex: 'Tomo ciencia... Aguardar manifestacao do MPF').\n\n"
+                "**ESFORCO PROPORCIONAL**:\n"
+                f"- **Despacho**: salve o texto em `{paj_pasta}\\despacho.txt` (so TXT, sem DOCX/PDF, sem validacao pesada). Texto curto e direto.\n"
+                f"- **Arquivamento**: skill arquivamento, salve em `{paj_pasta}\\`. SE for peca formal, rode validacao + formatar_peca.py.\n"
+                f"- **Recurso**: peca completa em `{paj_pasta}\\`, com validacao anti-alucinacao + formatar_peca.py gerando DOCX/PDF.\n\n"
+                "Ao final, apresente um **RESUMO ESTRUTURADO**:\n\n"
                 "```\n"
                 "## Decisao: [DESPACHO | ARQUIVAMENTO | RECURSO — <tipo>]\n\n"
                 "### Justificativa\n"
-                "<3-5 linhas explicando POR QUE escolheu essa opcao>\n\n"
-                "### Peca gerada\n"
-                "<nome do arquivo final DOCX/PDF e onde esta salvo>\n\n"
-                "### Pontos-chave da peca\n"
+                "<3-5 linhas explicando POR QUE>\n\n"
+                "### Texto da peca/despacho\n"
+                "```\n"
+                "<TEXTO COMPLETO DA PECA/DESPACHO aqui, formatado, pronto pra copiar>\n"
+                "```\n\n"
+                "### Arquivos gerados\n"
+                "- <caminho absoluto do arquivo .txt/.docx/.pdf gerado>\n\n"
+                "### Pontos-chave\n"
                 "- <bullet 1>\n"
-                "- <bullet 2>\n"
-                "- <bullet 3>\n\n"
+                "- <bullet 2>\n\n"
                 "### Se discordar\n"
                 "Me diga o que mudar e eu refaco.\n"
                 "```\n\n"
-                "Se eu responder com discordancia ou correcao, refaca conforme instruido.\n\n"
+                "Se eu responder com discordancia, refaca conforme instruido.\n\n"
                 "---\n\n"
                 f"{prompt_content}"
             )
@@ -156,6 +163,12 @@ class ChatSession:
             self.output_queue.put({"type": "error", "text": str(e)})
             self.output_queue.put({"type": "done"})
             self._alive = False
+        finally:
+            # Subprocess morreu — libera slot e promove proximo da fila
+            try:
+                _process_queue()
+            except Exception:
+                pass
 
     def _parse_event(self, event: dict) -> dict | None:
         """Converte evento stream-json do Claude em formato simplificado pro frontend."""
@@ -182,6 +195,19 @@ class ChatSession:
                     tool_name = block.get("name", "?")
                     self.last_action = f"usando {tool_name}"
                     return {"type": "tool", "text": f"[usando: {tool_name}]"}
+
+            # Tool use input — captura o comando/arquivo sendo acessado
+            if inner_type == "content_block_delta":
+                delta = inner.get("delta", {})
+                if delta.get("type") == "input_json_delta":
+                    # Concatena partial inputs (Claude vai mandando em chunks)
+                    partial = delta.get("partial_json", "")
+                    # Simples heuristica: se parece com comando/file path, atualiza last_action
+                    if partial and len(partial) > 3:
+                        snippet = partial.strip().strip('{},:"').strip()[:60]
+                        if snippet:
+                            self.last_action = (self.last_action or "") + " " + snippet
+                            self.last_action = self.last_action[-120:]  # limita tamanho
 
             return None
 
@@ -231,12 +257,30 @@ class ChatSession:
                 pass
 
 
-# Sessoes ativas (in-memory, single user)
+# Sessoes ativas (in-memory, single user) + fila de espera
 _sessions: dict[str, ChatSession] = {}
+_queue: list[str] = []  # paj_norms aguardando slot livre
+MAX_PARALLEL = 5
+
+
+def _count_running() -> int:
+    return sum(1 for s in _sessions.values() if s.status == "running")
+
+
+def _process_queue() -> None:
+    """Promove proximos da fila enquanto houver slots livres."""
+    while _queue and _count_running() < MAX_PARALLEL:
+        next_paj = _queue.pop(0)
+        session = _sessions.get(next_paj)
+        if not session:
+            continue
+        # Promove: inicia o subprocess agora
+        session.status = "idle"  # reset pra start() funcionar
+        session.start()
 
 
 def get_or_create_session(paj_norm: str) -> ChatSession:
-    """Retorna sessao existente ou cria nova."""
+    """Retorna sessao existente ou cria nova (sem iniciar)."""
     if paj_norm in _sessions and _sessions[paj_norm].is_alive():
         return _sessions[paj_norm]
     if paj_norm in _sessions:
@@ -246,7 +290,46 @@ def get_or_create_session(paj_norm: str) -> ChatSession:
     return session
 
 
+def start_or_queue(paj_norm: str) -> dict:
+    """Inicia sessao se houver slot, senao enfileira. Retorna status atual."""
+    existing = _sessions.get(paj_norm)
+    # Se ja esta rodando, nao faz nada
+    if existing and existing.is_alive() and existing.status == "running":
+        return {"status": "running", "last_action": existing.last_action}
+    # Se esta na fila, permanece
+    if paj_norm in _queue:
+        return {"status": "queued", "last_action": "aguardando slot"}
+
+    # Recria sessao limpa
+    if existing:
+        existing.stop()
+    session = ChatSession(paj_norm)
+    _sessions[paj_norm] = session
+
+    if _count_running() >= MAX_PARALLEL:
+        # Enfileira
+        session.status = "queued"
+        session.last_action = f"aguardando slot (fila: {len(_queue) + 1})"
+        _queue.append(paj_norm)
+        return {"status": "queued", "last_action": session.last_action}
+
+    # Ha slot livre — inicia imediatamente
+    session.start()
+    return {"status": session.status, "last_action": session.last_action}
+
+
 def stop_session(paj_norm: str):
+    if paj_norm in _queue:
+        _queue.remove(paj_norm)
     if paj_norm in _sessions:
         _sessions[paj_norm].stop()
         del _sessions[paj_norm]
+    _process_queue()
+
+
+def get_stats() -> dict:
+    return {
+        "running": _count_running(),
+        "queued": len(_queue),
+        "max_parallel": MAX_PARALLEL,
+    }

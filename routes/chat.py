@@ -4,43 +4,44 @@ import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, Body
 from fastapi.responses import HTMLResponse, JSONResponse
-from sse_starlette.sse import EventSourceResponse
 
-from services.claude_service import elaborar_peca
-from services.chat_service import get_or_create_session, stop_session, _sessions
+from services.chat_service import (
+    get_or_create_session,
+    stop_session,
+    start_or_queue,
+    get_stats,
+    _sessions,
+    _queue,
+)
 
 router = APIRouter()
 
 
-# ----- Elaborar Peca (legado single-shot SSE) -----
-
-async def _stream_elaboracao(paj_norm: str):
-    async for chunk in elaborar_peca(paj_norm):
-        yield {"event": "chunk", "data": chunk}
-    yield {"event": "done", "data": "[fim]"}
-
-
-@router.get("/api/elaborar/{paj_norm}")
-async def elaborar_sse(paj_norm: str):
-    return EventSourceResponse(_stream_elaboracao(paj_norm))
-
-
-# ----- Fluxo novo: background + polling + correcao multi-turn -----
+# ----- Elaborar Peca (background + polling + correcao multi-turn) -----
 
 @router.post("/api/elaborar/start/{paj_norm}")
 async def elaborar_start(paj_norm: str):
-    """Inicia (ou reinicia) a elaboracao em background."""
-    # Se ja existe uma sessao viva, nao reinicia — retorna status atual
-    existing = _sessions.get(paj_norm)
-    if existing and existing.is_alive() and existing.status == "running":
-        return {"status": existing.status, "last_action": existing.last_action}
+    """Inicia elaboracao (ou enfileira se limite de paralelos atingido)."""
+    return start_or_queue(paj_norm)
 
-    # Recria sessao e inicia
-    if existing:
-        existing.stop()
-    session = get_or_create_session(paj_norm)
-    session.start()
-    return {"status": session.status, "last_action": session.last_action}
+
+@router.get("/api/elaborar/stats")
+async def elaborar_stats():
+    """Retorna {running, queued, max_parallel} — pro dashboard."""
+    return get_stats()
+
+
+@router.get("/api/elaborar/status")
+async def elaborar_status_all():
+    """Retorna status de todas as sessoes (pro dashboard)."""
+    result: dict[str, dict] = {}
+    for paj_norm, session in _sessions.items():
+        result[paj_norm] = {
+            "status": session.status,
+            "last_action": session.last_action,
+            "alive": session.is_alive(),
+        }
+    return result
 
 
 @router.get("/api/elaborar/status/{paj_norm}")

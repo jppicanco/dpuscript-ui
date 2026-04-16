@@ -84,7 +84,44 @@ function runPipeline(url, title) {
     };
 }
 
-/* Elaborar Peca (fluxo novo — background + polling + modal) */
+/* Elaborar Peca (fluxo novo — background + polling + modal global) */
+
+// Guarda o PAJ atual do modal pra funcoes auxiliares
+var _resumoPajAtual = null;
+
+async function abrirResumo(pajNorm) {
+    _resumoPajAtual = pajNorm;
+    const modal = document.getElementById('resumo-modal');
+    const content = document.getElementById('resumo-content');
+    const label = document.getElementById('resumo-paj-label');
+    const linkPaj = document.getElementById('resumo-abrir-paj');
+    if (!modal || !content) return;
+
+    // Label e link pro detalhe
+    if (label) label.textContent = pajNorm;
+    if (linkPaj) linkPaj.href = '/paj/' + pajNorm;
+
+    // Busca o resumo mais recente
+    try {
+        const resp = await fetch('/api/elaborar/status/' + pajNorm);
+        const data = await resp.json();
+        content.textContent = data.summary || '(resumo vazio — elaboracao ainda nao concluida?)';
+    } catch (e) {
+        content.textContent = 'Erro ao carregar resumo: ' + e.message;
+    }
+
+    modal.showModal();
+}
+
+async function enviarCorrecaoAtual() {
+    if (!_resumoPajAtual) {
+        showToast('Nenhum PAJ ativo', 'warning');
+        return;
+    }
+    await enviarCorrecao(_resumoPajAtual);
+}
+
+
 
 function elaborarApp(pajNorm) {
     return {
@@ -146,11 +183,7 @@ function elaborarApp(pajNorm) {
         },
 
         verResumo() {
-            const modal = document.getElementById('resumo-modal');
-            const content = document.getElementById('resumo-content');
-            if (!modal || !content) return;
-            content.textContent = this.summary || '(resumo vazio)';
-            modal.showModal();
+            abrirResumo(this.pajNorm);
         }
     };
 }
@@ -175,9 +208,8 @@ async function enviarCorrecao(pajNorm) {
         }
         showToast('Correcao enviada — Claude refazendo', 'info');
         textarea.value = '';
-        // Fecha modal e reinicia polling
         document.getElementById('resumo-modal')?.close();
-        location.reload();  // recarrega pra voltar ao polling de running
+        // Dashboard e detalhe atualizam via polling — nao precisa reload
     } catch (e) {
         showToast('Erro: ' + e.message, 'error');
     }

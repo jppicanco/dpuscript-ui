@@ -14,6 +14,19 @@
                     — pipeline rodou em <span x-text="ultimaExecucao" class="text-primary"></span>
                 </span>
             </p>
+            <!-- Indicador de concorrencia -->
+            <div class="flex gap-2 mt-2" x-show="stats.running > 0 || stats.queued > 0">
+                <span class="badge badge-warning badge-sm">
+                    <span class="loading loading-spinner loading-xs mr-1"></span>
+                    <span x-text="stats.running"></span> rodando
+                </span>
+                <span class="badge badge-ghost badge-sm" x-show="stats.queued > 0">
+                    <span x-text="stats.queued"></span> em fila
+                </span>
+                <span class="text-xs text-base-content/50 self-center">
+                    (limite: <span x-text="stats.max_parallel"></span> em paralelo)
+                </span>
+            </div>
         </div>
         <div class="flex gap-2">
             <button class="btn btn-primary btn-sm"
@@ -72,7 +85,7 @@
                         Data <span x-text="iconOrdem('data_caixa')"></span>
                     </th>
                     <th>Pecas</th>
-                    <th>Acoes</th>
+                    <th>Elaboracao</th>
                 </tr>
             </thead>
             <tbody>
@@ -114,12 +127,34 @@
                                 <span class="badge badge-ghost badge-xs" x-text="paj.n_decisoes + ' dec'" x-show="paj.n_decisoes > 0"></span>
                             </div>
                         </td>
-                        <!-- Acoes -->
+                        <!-- Elaboracao (estado em tempo real) -->
                         <td @click.stop>
-                            <div class="flex gap-1">
-                                <a :href="'/paj/' + paj.paj_norm"
-                                   class="btn btn-ghost btn-xs">Abrir</a>
-                            </div>
+                            <template x-if="statusOf(paj.paj_norm).status === 'running'">
+                                <div class="flex items-center gap-2">
+                                    <span class="loading loading-spinner loading-xs text-warning"></span>
+                                    <span class="text-xs text-base-content/70 truncate max-w-32"
+                                          x-text="statusOf(paj.paj_norm).last_action || 'trabalhando...'"></span>
+                                </div>
+                            </template>
+                            <template x-if="statusOf(paj.paj_norm).status === 'queued'">
+                                <div class="flex items-center gap-2">
+                                    <span class="badge badge-ghost badge-sm">em fila</span>
+                                    <span class="text-xs text-base-content/50"
+                                          x-text="statusOf(paj.paj_norm).last_action || ''"></span>
+                                </div>
+                            </template>
+                            <template x-if="statusOf(paj.paj_norm).status === 'done'">
+                                <button class="btn btn-success btn-xs"
+                                        @click="abrirResumoCaixa(paj.paj_norm)">
+                                    Ver Resumo
+                                </button>
+                            </template>
+                            <template x-if="statusOf(paj.paj_norm).status === 'error'">
+                                <span class="badge badge-error badge-sm">erro</span>
+                            </template>
+                            <template x-if="!statusOf(paj.paj_norm).status || statusOf(paj.paj_norm).status === 'idle'">
+                                <span class="text-xs text-base-content/30">—</span>
+                            </template>
                         </td>
                     </tr>
                 </template>
@@ -167,6 +202,9 @@ function dashboardApp() {
         busca: '',
         ordemCampo: 'data_caixa',
         ordemAsc: false,
+        // Status de elaboracao por PAJ (polling de /api/elaborar/status)
+        statusMap: {},
+        stats: {running: 0, queued: 0, max_parallel: 5},
 
         async init() {
             const resp = await fetch('/api/pajs');
@@ -174,6 +212,30 @@ function dashboardApp() {
             this.pajs = data.pajs || [];
             this.ultimaExecucao = data.ultima_execucao || '';
             this.aplicarFiltros();
+            // Inicia polling de status + stats
+            await this.atualizarStatus();
+            setInterval(() => this.atualizarStatus(), 3000);
+        },
+
+        async atualizarStatus() {
+            try {
+                const [rStatus, rStats] = await Promise.all([
+                    fetch('/api/elaborar/status'),
+                    fetch('/api/elaborar/stats'),
+                ]);
+                this.statusMap = await rStatus.json();
+                this.stats = await rStats.json();
+            } catch (e) {
+                // silencia
+            }
+        },
+
+        statusOf(pajNorm) {
+            return this.statusMap[pajNorm] || {};
+        },
+
+        abrirResumoCaixa(pajNorm) {
+            abrirResumo(pajNorm);
         },
 
         get classificacoesUnicas() {
