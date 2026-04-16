@@ -10,9 +10,11 @@ from services.chat_service import (
     stop_session,
     start_or_queue,
     get_stats,
+    ler_elaboracao_disco,
     _sessions,
     _queue,
 )
+from config import ENTRADA_DIR
 
 router = APIRouter()
 
@@ -33,30 +35,65 @@ async def elaborar_stats():
 
 @router.get("/api/elaborar/status")
 async def elaborar_status_all():
-    """Retorna status de todas as sessoes (pro dashboard)."""
+    """Retorna status de todas as sessoes — RAM + persistencia em disco.
+
+    Busca status em memoria (sessoes ativas) e tambem PAJs que ja foram
+    elaborados antes (tem elaboracao.json no disco). Prefere RAM sobre disco
+    quando os dois existem.
+    """
     result: dict[str, dict] = {}
+
+    # 1. PAJs com elaboracao persistida em disco (resultado de runs anteriores)
+    if ENTRADA_DIR.exists():
+        for pasta in ENTRADA_DIR.iterdir():
+            if not pasta.is_dir():
+                continue
+            persist = ler_elaboracao_disco(pasta.name)
+            if persist:
+                result[pasta.name] = {
+                    "status": persist.get("status", "done"),
+                    "last_action": persist.get("last_action", ""),
+                    "alive": False,
+                    "persisted": True,
+                }
+
+    # 2. Sessoes em memoria sobrescrevem (dados mais frescos)
     for paj_norm, session in _sessions.items():
         result[paj_norm] = {
             "status": session.status,
             "last_action": session.last_action,
             "alive": session.is_alive(),
+            "persisted": False,
         }
     return result
 
 
 @router.get("/api/elaborar/status/{paj_norm}")
 async def elaborar_status(paj_norm: str):
-    """Retorna status atual: idle/running/done/error + resumo se pronto."""
+    """Retorna status atual: le sessao em memoria OU elaboracao.json do disco."""
     session = _sessions.get(paj_norm)
-    if not session:
-        return {"status": "idle", "last_action": "", "summary": "", "error": ""}
-    return {
-        "status": session.status,
-        "last_action": session.last_action,
-        "summary": session.summary,
-        "error": session.error,
-        "alive": session.is_alive(),
-    }
+    if session:
+        return {
+            "status": session.status,
+            "last_action": session.last_action,
+            "summary": session.summary,
+            "error": session.error,
+            "alive": session.is_alive(),
+            "persisted": False,
+        }
+    # Fallback: le do disco (persistido de run anterior)
+    persist = ler_elaboracao_disco(paj_norm)
+    if persist:
+        return {
+            "status": persist.get("status", "done"),
+            "last_action": persist.get("last_action", ""),
+            "summary": persist.get("summary", ""),
+            "error": "",
+            "alive": False,
+            "persisted": True,
+            "concluido_em": persist.get("concluido_em", ""),
+        }
+    return {"status": "idle", "last_action": "", "summary": "", "error": ""}
 
 
 @router.post("/api/elaborar/correcao/{paj_norm}")

@@ -230,6 +230,8 @@ class ChatSession:
             self.status = "done"
             self.last_action = "aguardando sua resposta"
             session_id = event.get("session_id", "")[:8]
+            # Persiste em disco pra sobreviver reinicio do servidor
+            self._persist()
             return {
                 "type": "result",
                 "text": result_text if isinstance(result_text, str) else "",
@@ -261,6 +263,69 @@ class ChatSession:
                 self.proc.terminate()
             except Exception:
                 pass
+
+    def _persist(self) -> None:
+        """Salva status + summary em Entrada/{paj}/elaboracao.json.
+
+        Assim o resultado sobrevive a reinicio do servidor — a UI le do disco
+        quando nao ha sessao em memoria.
+        """
+        try:
+            pasta = ENTRADA_DIR / self.paj_norm
+            if not pasta.exists():
+                return
+            import datetime as _dt
+            data = {
+                "status": self.status,
+                "summary": self.summary,
+                "last_action": self.last_action,
+                "concluido_em": _dt.datetime.now().isoformat(),
+            }
+            (pasta / "elaboracao.json").write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+
+def ler_elaboracao_disco(paj_norm: str) -> dict | None:
+    """Le o estado persistido da elaboracao (ou None se nao existe).
+
+    Precedencia:
+    1. elaboracao.json (salvo automaticamente por _persist — tem resumo completo)
+    2. Se nao tem elaboracao.json mas TEM arquivo gerado (despacho.txt, *.docx,
+       *.pdf na raiz), considera "done" sem resumo detalhado.
+    """
+    try:
+        pasta = ENTRADA_DIR / paj_norm
+        if not pasta.exists():
+            return None
+
+        f = pasta / "elaboracao.json"
+        if f.exists():
+            return json.loads(f.read_text(encoding="utf-8"))
+
+        # Fallback: tem arquivo gerado na raiz?
+        IGNORAR = {"metadata.json", "eventos_tnu.json", "datajud.json", "PROMPT_MAX.md", "elaboracao.json"}
+        gerados = [x for x in pasta.iterdir() if x.is_file() and x.name not in IGNORAR]
+        if gerados:
+            nomes = ", ".join(sorted(x.name for x in gerados))
+            return {
+                "status": "done",
+                "last_action": "arquivos ja gerados",
+                "summary": (
+                    "(Resumo detalhado nao esta disponivel — este PAJ foi "
+                    "elaborado antes da implementacao da persistencia em disco.)\n\n"
+                    f"Arquivos gerados na pasta: {nomes}\n\n"
+                    "Abra a tab 'Pecas Geradas' do PAJ pra ver/baixar os arquivos, "
+                    "ou clique em 'Elaborar Peca' de novo pra regerar o resumo."
+                ),
+                "concluido_em": "",
+            }
+        return None
+    except Exception:
+        return None
 
 
 # Sessoes ativas (in-memory, single user) + fila de espera

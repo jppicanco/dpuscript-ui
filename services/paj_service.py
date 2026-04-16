@@ -167,7 +167,7 @@ def ler_paj(paj_norm: str) -> dict | None:
 
     # Pecas GERADAS pelo Claude (arquivos na RAIZ da pasta do PAJ)
     # Ex: despacho.txt, recurso.docx, peca.pdf (exclui metadata/eventos/PROMPT_MAX)
-    IGNORAR = {"metadata.json", "eventos_tnu.json", "datajud.json", "PROMPT_MAX.md"}
+    IGNORAR = {"metadata.json", "eventos_tnu.json", "datajud.json", "PROMPT_MAX.md", "elaboracao.json"}
     pecas_geradas: list[dict] = []
     for f in sorted(pasta.iterdir()):
         if not f.is_file() or f.name in IGNORAR:
