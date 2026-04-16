@@ -38,6 +38,7 @@ async def elaborar_peca(paj_norm: str) -> AsyncGenerator[str, None]:
         "--verbose",
         "--output-format", "stream-json",
         "--include-partial-messages",
+        "--permission-mode", "bypassPermissions",
     ]
 
     yield f"[dpuscript-ui] Elaborando peca para PAJ {paj_norm}...\n"

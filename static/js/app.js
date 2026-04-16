@@ -84,7 +84,106 @@ function runPipeline(url, title) {
     };
 }
 
-/* Elaborar Peca — streaming SSE do Claude Code CLI */
+/* Elaborar Peca (fluxo novo — background + polling + modal) */
+
+function elaborarApp(pajNorm) {
+    return {
+        pajNorm: pajNorm,
+        status: 'idle',        // idle | running | done | error
+        lastAction: '',
+        summary: '',
+        error: '',
+        _pollTimer: null,
+
+        async init() {
+            // Ao carregar a pagina, checa se ja existe sessao rodando ou pronta
+            await this.fetchStatus();
+            if (this.status === 'running') {
+                this.startPolling();
+            }
+        },
+
+        async fetchStatus() {
+            try {
+                const resp = await fetch('/api/elaborar/status/' + this.pajNorm);
+                const data = await resp.json();
+                this.status = data.status || 'idle';
+                this.lastAction = data.last_action || '';
+                this.summary = data.summary || '';
+                this.error = data.error || '';
+            } catch (e) {
+                this.error = 'Erro ao consultar status: ' + e.message;
+                this.status = 'error';
+            }
+        },
+
+        async iniciar() {
+            this.status = 'running';
+            this.lastAction = 'iniciando...';
+            this.error = '';
+            try {
+                await fetch('/api/elaborar/start/' + this.pajNorm, {method: 'POST'});
+                showToast('Claude iniciou a elaboracao — pode navegar livremente', 'info');
+                this.startPolling();
+            } catch (e) {
+                this.status = 'error';
+                this.error = 'Falha ao iniciar: ' + e.message;
+            }
+        },
+
+        startPolling() {
+            if (this._pollTimer) return;
+            this._pollTimer = setInterval(async () => {
+                await this.fetchStatus();
+                if (this.status === 'done' || this.status === 'error' || this.status === 'idle') {
+                    clearInterval(this._pollTimer);
+                    this._pollTimer = null;
+                    if (this.status === 'done') {
+                        showToast('Peca elaborada — clique em Ver Resumo', 'success');
+                    }
+                }
+            }, 2000);
+        },
+
+        verResumo() {
+            const modal = document.getElementById('resumo-modal');
+            const content = document.getElementById('resumo-content');
+            if (!modal || !content) return;
+            content.textContent = this.summary || '(resumo vazio)';
+            modal.showModal();
+        }
+    };
+}
+
+async function enviarCorrecao(pajNorm) {
+    const textarea = document.getElementById('correcao-text');
+    const text = (textarea?.value || '').trim();
+    if (!text) {
+        showToast('Digite a correcao primeiro', 'warning');
+        return;
+    }
+    try {
+        const resp = await fetch('/api/elaborar/correcao/' + pajNorm, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text: text}),
+        });
+        if (!resp.ok) {
+            const err = await resp.json();
+            showToast('Erro: ' + (err.erro || resp.status), 'error');
+            return;
+        }
+        showToast('Correcao enviada — Claude refazendo', 'info');
+        textarea.value = '';
+        // Fecha modal e reinicia polling
+        document.getElementById('resumo-modal')?.close();
+        location.reload();  // recarrega pra voltar ao polling de running
+    } catch (e) {
+        showToast('Erro: ' + e.message, 'error');
+    }
+}
+
+/* Elaborar Peca LEGADO — streaming SSE do Claude Code CLI (fluxo antigo) */
 var _claudeSource = null;
 
 function elaborarPeca(pajNorm) {

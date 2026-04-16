@@ -35,4 +35,6 @@ app.include_router(chat_router)
 
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="127.0.0.1", port=8001, reload=True)
+    # reload=False — reload cria processos duplicados que acabam brigando pela porta
+    # Pra desenvolvimento: use scripts start.py / stop.py que gerenciam PID
+    uvicorn.run("app:app", host="127.0.0.1", port=8001, reload=False)

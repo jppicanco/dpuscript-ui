@@ -36,10 +36,11 @@
         font-size: 0.9rem;
     }
     .msg-tool {
-        font-size: 0.75rem;
-        color: oklch(var(--s));
-        padding: 0.25rem 0;
+        font-size: 0.7rem;
+        color: oklch(var(--bc) / 0.45);
+        padding: 0.15rem 0;
         font-style: italic;
+        font-family: ui-monospace, monospace;
     }
     .msg-error {
         color: oklch(var(--er));
@@ -77,7 +78,11 @@
                     <li>Chat</li>
                 </ul>
             </div>
-            <h2 class="text-xl font-bold">Chat com Claude — PAJ {{ paj_norm }}</h2>
+            <h2 class="text-xl font-bold">Elaborar Peca — PAJ {{ paj_norm }}</h2>
+            <p class="text-xs text-base-content/60 mt-1">
+                Claude vai analisar e decidir autonomamente (despacho, arquivamento ou recurso).
+                Se discordar no final, digite a correcao no campo abaixo.
+            </p>
         </div>
         <div class="flex items-center gap-3">
             <span class="badge badge-sm" :class="statusClass" x-text="statusText"></span>
@@ -200,13 +205,14 @@ function chatApp() {
                 this.messages.push({type: 'tool', text: data.text});
             }
             else if (data.type === 'result') {
+                // Claude terminou esta resposta — NAO encerra o chat (multi-turn)
                 this.isTyping = false;
-                if (data.text && !this.currentAssistantMsg) {
-                    this.messages.push({type: 'assistant', text: data.text});
-                }
+                // Nao adiciona texto: os deltas ja acumularam a resposta
                 this.currentAssistantMsg = null;
-                this.isDone = true;
-                showToast('Chat concluido', 'success');
+                // Foca o input pra user responder
+                this.$nextTick(function() {
+                    if (self.$refs.chatInput) self.$refs.chatInput.focus();
+                });
             }
             else if (data.type === 'error') {
                 this.isTyping = false;
