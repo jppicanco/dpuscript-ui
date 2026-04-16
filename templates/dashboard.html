@@ -1,0 +1,243 @@
+{% extends "base.html" %}
+{% block title %}Caixa de Entrada{% endblock %}
+
+{% block content %}
+<div x-data="dashboardApp()" x-init="init()">
+
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+        <div>
+            <h2 class="text-2xl font-bold">Caixa de Entrada</h2>
+            <p class="text-sm text-base-content/60 mt-1">
+                <span x-text="pajs.length"></span> PAJs
+                <span x-show="ultimaExecucao" class="ml-2">
+                    — pipeline rodou em <span x-text="ultimaExecucao" class="text-primary"></span>
+                </span>
+            </p>
+        </div>
+        <div class="flex gap-2">
+            <button class="btn btn-primary btn-sm"
+                    onclick="runPipeline('/api/pipeline/run', 'Pipeline completo')">
+                Rodar Pipeline
+            </button>
+        </div>
+    </div>
+
+    <!-- Filtros -->
+    <div class="flex flex-wrap gap-3 mb-5">
+        <!-- Foro -->
+        <select class="select select-bordered select-sm"
+                x-model="filtroForo" @change="aplicarFiltros()">
+            <option value="">Todos os foros</option>
+            <option value="TNU">TNU</option>
+            <option value="STJ">STJ</option>
+            <option value="OUTRO">Outro</option>
+        </select>
+
+        <!-- Classificacao -->
+        <select class="select select-bordered select-sm"
+                x-model="filtroClassif" @change="aplicarFiltros()">
+            <option value="">Todas as classificacoes</option>
+            <template x-for="c in classificacoesUnicas" :key="c">
+                <option :value="c" x-text="c"></option>
+            </template>
+        </select>
+
+        <!-- Busca -->
+        <input type="text" placeholder="Buscar assistido ou PAJ..."
+               class="input input-bordered input-sm w-64"
+               x-model="busca" @input.debounce.300ms="aplicarFiltros()" />
+
+        <span class="text-sm text-base-content/50 self-center"
+              x-show="pajsFiltrados.length !== pajs.length"
+              x-text="`${pajsFiltrados.length} de ${pajs.length}`"></span>
+    </div>
+
+    <!-- Tabela de PAJs -->
+    <div class="overflow-x-auto rounded-lg border border-base-300 bg-base-200">
+        <table class="table table-sm">
+            <thead>
+                <tr class="bg-base-300/50">
+                    <th class="cursor-pointer" @click="ordenarPor('paj')">
+                        PAJ <span x-text="iconOrdem('paj')"></span>
+                    </th>
+                    <th class="cursor-pointer" @click="ordenarPor('assistido')">
+                        Assistido <span x-text="iconOrdem('assistido')"></span>
+                    </th>
+                    <th>Foro</th>
+                    <th class="cursor-pointer" @click="ordenarPor('classificacao')">
+                        Classificacao <span x-text="iconOrdem('classificacao')"></span>
+                    </th>
+                    <th class="cursor-pointer" @click="ordenarPor('data_caixa')">
+                        Data <span x-text="iconOrdem('data_caixa')"></span>
+                    </th>
+                    <th>Pecas</th>
+                    <th>Acoes</th>
+                </tr>
+            </thead>
+            <tbody>
+                <template x-for="paj in pajsFiltrados" :key="paj.paj_norm">
+                    <tr class="hover:bg-base-300/30 transition-colors cursor-pointer"
+                        @click="window.location.href = '/paj/' + paj.paj_norm">
+                        <!-- PAJ -->
+                        <td>
+                            <div class="font-mono text-sm font-semibold" x-text="paj.paj"></div>
+                            <div class="text-xs text-base-content/50 truncate max-w-48"
+                                 x-text="paj.processo_judicial || ''"></div>
+                        </td>
+                        <!-- Assistido -->
+                        <td>
+                            <div class="font-medium text-sm truncate max-w-52" x-text="paj.assistido || '—'"></div>
+                            <div class="text-xs text-base-content/50" x-text="paj.oficio || ''"></div>
+                        </td>
+                        <!-- Foro -->
+                        <td>
+                            <span class="badge badge-sm"
+                                  :class="paj.foro === 'TNU' ? 'badge-info' : paj.foro === 'STJ' ? 'badge-warning' : 'badge-ghost'"
+                                  x-text="paj.foro"></span>
+                        </td>
+                        <!-- Classificacao -->
+                        <td>
+                            <span class="badge badge-sm badge-classif"
+                                  :class="classifBadge(paj.classificacao)"
+                                  x-text="paj.classificacao"></span>
+                            <template x-if="paj.prazos_abertos && paj.prazos_abertos.length > 0">
+                                <span class="badge badge-sm badge-error ml-1">PRAZO</span>
+                            </template>
+                        </td>
+                        <!-- Data -->
+                        <td class="text-sm whitespace-nowrap" x-text="paj.data_caixa || '—'"></td>
+                        <!-- Pecas -->
+                        <td>
+                            <div class="flex gap-1">
+                                <span class="badge badge-ghost badge-xs" x-text="paj.n_pecas + ' pecas'" x-show="paj.n_pecas > 0"></span>
+                                <span class="badge badge-ghost badge-xs" x-text="paj.n_decisoes + ' dec'" x-show="paj.n_decisoes > 0"></span>
+                            </div>
+                        </td>
+                        <!-- Acoes -->
+                        <td @click.stop>
+                            <div class="flex gap-1">
+                                <a :href="'/paj/' + paj.paj_norm"
+                                   class="btn btn-ghost btn-xs">Abrir</a>
+                            </div>
+                        </td>
+                    </tr>
+                </template>
+                <tr x-show="pajsFiltrados.length === 0">
+                    <td colspan="7" class="text-center py-8 text-base-content/50">
+                        Nenhum PAJ encontrado.
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Stats cards -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+        <div class="stat bg-base-200 rounded-lg border border-base-300 p-4">
+            <div class="stat-title text-xs">Total PAJs</div>
+            <div class="stat-value text-2xl" x-text="pajs.length">0</div>
+        </div>
+        <div class="stat bg-base-200 rounded-lg border border-base-300 p-4">
+            <div class="stat-title text-xs">TNU</div>
+            <div class="stat-value text-2xl text-info" x-text="pajs.filter(p => p.foro === 'TNU').length">0</div>
+        </div>
+        <div class="stat bg-base-200 rounded-lg border border-base-300 p-4">
+            <div class="stat-title text-xs">STJ</div>
+            <div class="stat-value text-2xl text-warning" x-text="pajs.filter(p => p.foro === 'STJ').length">0</div>
+        </div>
+        <div class="stat bg-base-200 rounded-lg border border-base-300 p-4">
+            <div class="stat-title text-xs">Com prazo</div>
+            <div class="stat-value text-2xl text-error" x-text="pajs.filter(p => p.prazos_abertos && p.prazos_abertos.length > 0).length">0</div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function dashboardApp() {
+    return {
+        pajs: [],
+        pajsFiltrados: [],
+        ultimaExecucao: '',
+        filtroForo: '',
+        filtroClassif: '',
+        busca: '',
+        ordemCampo: 'data_caixa',
+        ordemAsc: false,
+
+        async init() {
+            const resp = await fetch('/api/pajs');
+            const data = await resp.json();
+            this.pajs = data.pajs || [];
+            this.ultimaExecucao = data.ultima_execucao || '';
+            this.aplicarFiltros();
+        },
+
+        get classificacoesUnicas() {
+            return [...new Set(this.pajs.map(p => p.classificacao))].sort();
+        },
+
+        aplicarFiltros() {
+            let lista = this.pajs;
+            if (this.filtroForo) {
+                lista = lista.filter(p => p.foro === this.filtroForo);
+            }
+            if (this.filtroClassif) {
+                lista = lista.filter(p => p.classificacao === this.filtroClassif);
+            }
+            if (this.busca) {
+                const q = this.busca.toLowerCase();
+                lista = lista.filter(p =>
+                    (p.paj || '').toLowerCase().includes(q) ||
+                    (p.assistido || '').toLowerCase().includes(q) ||
+                    (p.processo_judicial || '').toLowerCase().includes(q)
+                );
+            }
+            // Ordenacao
+            lista = [...lista].sort((a, b) => {
+                let va = a[this.ordemCampo] || '';
+                let vb = b[this.ordemCampo] || '';
+                if (typeof va === 'string') va = va.toLowerCase();
+                if (typeof vb === 'string') vb = vb.toLowerCase();
+                if (va < vb) return this.ordemAsc ? -1 : 1;
+                if (va > vb) return this.ordemAsc ? 1 : -1;
+                return 0;
+            });
+            this.pajsFiltrados = lista;
+        },
+
+        ordenarPor(campo) {
+            if (this.ordemCampo === campo) {
+                this.ordemAsc = !this.ordemAsc;
+            } else {
+                this.ordemCampo = campo;
+                this.ordemAsc = true;
+            }
+            this.aplicarFiltros();
+        },
+
+        iconOrdem(campo) {
+            if (this.ordemCampo !== campo) return '';
+            return this.ordemAsc ? '▲' : '▼';
+        },
+
+        classifBadge(classif) {
+            if (!classif) return 'badge-ghost';
+            const c = classif.toUpperCase();
+            if (c.includes('VISTA_MP')) return 'badge-warning';
+            if (c.includes('INCLUSAO_EM_PAUTA')) return 'badge-accent';
+            if (c.includes('ARQUIVADO')) return 'badge-ghost';
+            if (c.includes('DECISAO') || c.includes('AGRAVAVEL')) return 'badge-error';
+            if (c.includes('RETORNO_ASSISTIDO')) return 'badge-info';
+            if (c.includes('RETORNO_AUTOMATICO')) return 'badge-ghost';
+            if (c.includes('INTIMACAO')) return 'badge-info';
+            if (c.includes('AGUARDA')) return 'badge-neutral';
+            return 'badge-neutral';
+        }
+    };
+}
+</script>
+{% endblock %}

@@ -1,0 +1,18 @@
+<!-- Modal de terminal do pipeline — inclua no base ou nas paginas que usam -->
+<dialog id="pipeline-modal" class="modal">
+    <div class="modal-box w-11/12 max-w-4xl bg-base-300">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="font-bold text-lg" id="pipeline-title">Pipeline</h3>
+            <div class="flex gap-2">
+                <span id="pipeline-status" class="badge badge-sm badge-ghost">parado</span>
+                <form method="dialog">
+                    <button class="btn btn-sm btn-ghost" id="pipeline-close-btn">X</button>
+                </form>
+            </div>
+        </div>
+        <div id="pipeline-log"
+             class="bg-neutral text-neutral-content font-mono text-xs p-4 rounded-lg h-96 overflow-y-auto whitespace-pre-wrap">
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>fechar</button></form>
+</dialog>

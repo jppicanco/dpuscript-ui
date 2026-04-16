@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+{% block title %}PAJ {{ dados.metadata.paj }} — {{ dados.metadata.assistido_caixa[:40] }}{% endblock %}
+
+{% block content %}
+{% set meta = dados.metadata %}
+{% set det = meta.detalhes_sisdpu or {} %}
+
+<!-- Breadcrumb + header -->
+<div class="mb-6">
+    <div class="text-sm breadcrumbs mb-2">
+        <ul>
+            <li><a href="/" class="text-primary">Caixa de Entrada</a></li>
+            <li>{{ meta.paj }}</li>
+        </ul>
+    </div>
+
+    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div>
+            <h2 class="text-2xl font-bold">PAJ {{ meta.paj }}</h2>
+            <p class="text-lg text-base-content/80 mt-1">{{ meta.assistido_caixa or '—' }}</p>
+            <div class="flex flex-wrap gap-2 mt-2">
+                <span class="badge badge-{{ 'info' if meta.foro_detectado == 'TNU' else ('warning' if meta.foro_detectado == 'STJ' else 'ghost') }}">
+                    {{ meta.foro_detectado }}
+                </span>
+                <span class="badge badge-outline">{{ meta.classificacao }}</span>
+                {% if meta.processo_judicial %}
+                <span class="badge badge-ghost font-mono text-xs">{{ meta.processo_judicial }}</span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="flex gap-2">
+            <button class="btn btn-sm btn-outline"
+                    onclick="runPipeline('/api/pipeline/run/{{ paj_norm }}', 'Reprocessar {{ meta.paj }}')">
+                Reprocessar
+            </button>
+            <button class="btn btn-sm btn-primary"
+                    onclick="elaborarPeca('{{ paj_norm }}')">
+                Elaborar Peca
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Info cards -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+    <div class="bg-base-200 rounded-lg border border-base-300 p-4">
+        <div class="text-xs text-base-content/50 mb-1">Status SISDPU</div>
+        <div class="font-semibold">{{ det.status_paj or 'Ativo' }}</div>
+    </div>
+    <div class="bg-base-200 rounded-lg border border-base-300 p-4">
+        <div class="text-xs text-base-content/50 mb-1">Entrada na caixa</div>
+        <div class="font-semibold">{{ meta.data_mov_caixa or '—' }}</div>
+    </div>
+    <div class="bg-base-200 rounded-lg border border-base-300 p-4">
+        <div class="text-xs text-base-content/50 mb-1">Ultima preparacao</div>
+        <div class="font-semibold text-sm">{{ meta.primeira_deteccao[:19] if meta.primeira_deteccao else '—' }}</div>
+    </div>
+</div>
+
+<!-- Prazos abertos (se houver) -->
+{% if dados.prazos_abertos %}
+<div class="alert alert-error mb-6">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+    </svg>
+    <div>
+        <h3 class="font-bold">Prazos abertos</h3>
+        {% for p in dados.prazos_abertos %}
+        <p class="text-sm">{{ p.data_final }} ({{ p.dias }} dias) — {{ p.parte }} [Seq {{ p.seq }}]</p>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Tabs -->
+<div x-data="{ tab: 'resumo' }" class="mt-4">
+    <div role="tablist" class="tabs tabs-bordered mb-4">
+        <a role="tab" class="tab" :class="tab === 'resumo' && 'tab-active'" @click="tab = 'resumo'">Resumo</a>
+        <a role="tab" class="tab" :class="tab === 'movs' && 'tab-active'" @click="tab = 'movs'">
+            Movimentacoes <span class="badge badge-ghost badge-xs ml-1">{{ dados.movimentacoes|length }}</span>
+        </a>
+        <a role="tab" class="tab" :class="tab === 'pecas' && 'tab-active'" @click="tab = 'pecas'">
+            Pecas TNU <span class="badge badge-ghost badge-xs ml-1">{{ dados.pecas|length }}</span>
+        </a>
+        <a role="tab" class="tab" :class="tab === 'decisoes' && 'tab-active'" @click="tab = 'decisoes'">
+            Decisoes <span class="badge badge-ghost badge-xs ml-1">{{ dados.decisoes|length }}</span>
+        </a>
+        <a role="tab" class="tab" :class="tab === 'prompt' && 'tab-active'" @click="tab = 'prompt'">PROMPT_MAX</a>
+    </div>
+
+    <!-- Tab: Resumo -->
+    <div x-show="tab === 'resumo'" class="bg-base-200 rounded-lg border border-base-300 p-6">
+        <h3 class="text-lg font-semibold mb-4">Descricao da movimentacao na caixa</h3>
+        <p class="text-sm text-base-content/80 whitespace-pre-wrap mb-6">{{ meta.desc_mov_caixa or '—' }}</p>
+
+        <h3 class="text-lg font-semibold mb-4">Dados do processo</h3>
+        <div class="overflow-x-auto">
+            <table class="table table-sm">
+                <tbody>
+                    <tr><td class="text-base-content/50 w-48">PAJ</td><td class="font-mono">{{ meta.paj }}</td></tr>
+                    <tr><td class="text-base-content/50">Processo judicial</td><td class="font-mono">{{ meta.processo_judicial or '—' }}</td></tr>
+                    <tr><td class="text-base-content/50">Foro</td><td>{{ meta.foro_detectado }}</td></tr>
+                    <tr><td class="text-base-content/50">Classificacao</td><td><span class="badge badge-outline">{{ meta.classificacao }}</span></td></tr>
+                    <tr><td class="text-base-content/50">Assistido</td><td>{{ meta.assistido_caixa or '—' }}</td></tr>
+                    <tr><td class="text-base-content/50">Oficio</td><td>{{ meta.oficio_caixa or '—' }}</td></tr>
+                    <tr><td class="text-base-content/50">Status</td><td>{{ det.status_paj or '—' }}</td></tr>
+                    <tr><td class="text-base-content/50">Data entrada caixa</td><td>{{ meta.data_mov_caixa or '—' }}</td></tr>
+                    <tr><td class="text-base-content/50">Classe evento</td><td>{{ meta.classe_evento or '—' }}</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Tab: Movimentacoes -->
+    <div x-show="tab === 'movs'" class="bg-base-200 rounded-lg border border-base-300 p-6">
+        <h3 class="text-lg font-semibold mb-4">Movimentacoes ({{ dados.movimentacoes|length }})</h3>
+        {% if dados.movimentacoes %}
+        <div class="space-y-4">
+            {% for mov in dados.movimentacoes %}
+            <div class="border-l-2 border-primary/30 pl-4 hover:border-primary transition-colors">
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="badge badge-sm badge-ghost font-mono">Seq {{ mov.seq or '?' }}</span>
+                    <span class="text-sm text-base-content/60">{{ mov.data or '?' }}</span>
+                    {% if mov.movimentacao %}
+                    <span class="text-xs text-base-content/40">{{ mov.movimentacao }}</span>
+                    {% endif %}
+                </div>
+                {% if mov.fases %}
+                <p class="text-xs text-info/70 italic mb-1">{{ mov.fases }}</p>
+                {% endif %}
+                {% if mov.descricao %}
+                <details class="cursor-pointer">
+                    <summary class="text-sm text-base-content/80 line-clamp-2">{{ mov.descricao[:200] }}{% if mov.descricao|length > 200 %}...{% endif %}</summary>
+                    <pre class="text-xs text-base-content/70 whitespace-pre-wrap mt-2 p-3 bg-base-300 rounded max-h-96 overflow-y-auto">{{ mov.descricao }}</pre>
+                </details>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-base-content/50">Nenhuma movimentacao registrada.</p>
+        {% endif %}
+    </div>
+
+    <!-- Tab: Pecas TNU -->
+    <div x-show="tab === 'pecas'" class="bg-base-200 rounded-lg border border-base-300 p-6">
+        <h3 class="text-lg font-semibold mb-4">Pecas TNU ({{ dados.pecas|length }})</h3>
+        {% if dados.pecas %}
+        <div class="overflow-x-auto">
+            <table class="table table-sm">
+                <thead>
+                    <tr class="bg-base-300/50">
+                        <th>Arquivo</th>
+                        <th>Tipo</th>
+                        <th>Tamanho</th>
+                        <th>Acoes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for peca in dados.pecas %}
+                    <tr class="hover:bg-base-300/30">
+                        <td class="font-mono text-xs">{{ peca.nome }}</td>
+                        <td>
+                            <span class="badge badge-sm {{ 'badge-error' if peca.tipo == 'pdf' else 'badge-ghost' }}">
+                                {{ peca.tipo|upper }}
+                            </span>
+                        </td>
+                        <td class="text-sm">{{ (peca.tamanho / 1024)|round(1) }} KB</td>
+                        <td>
+                            <a href="/files/{{ paj_norm }}/{{ peca.caminho }}"
+                               target="_blank"
+                               class="btn btn-ghost btn-xs">
+                                {{ 'Ver PDF' if peca.tipo == 'pdf' else 'Ver texto' }}
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-base-content/50">Nenhuma peca baixada.</p>
+        {% endif %}
+    </div>
+
+    <!-- Tab: Decisoes -->
+    <div x-show="tab === 'decisoes'" class="bg-base-200 rounded-lg border border-base-300 p-6">
+        <h3 class="text-lg font-semibold mb-4">Decisoes de tribunais superiores ({{ dados.decisoes|length }})</h3>
+        {% if dados.decisoes %}
+        <div class="overflow-x-auto">
+            <table class="table table-sm">
+                <thead>
+                    <tr class="bg-base-300/50">
+                        <th>Arquivo</th>
+                        <th>Tipo</th>
+                        <th>Tamanho</th>
+                        <th>Acoes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for dec in dados.decisoes %}
+                    <tr class="hover:bg-base-300/30">
+                        <td class="font-mono text-xs">{{ dec.nome }}</td>
+                        <td>
+                            <span class="badge badge-sm {{ 'badge-error' if dec.tipo == 'pdf' else 'badge-ghost' }}">
+                                {{ dec.tipo|upper }}
+                            </span>
+                        </td>
+                        <td class="text-sm">{{ (dec.tamanho / 1024)|round(1) }} KB</td>
+                        <td>
+                            <a href="/files/{{ paj_norm }}/{{ dec.caminho }}"
+                               target="_blank"
+                               class="btn btn-ghost btn-xs">
+                                {{ 'Ver PDF' if dec.tipo == 'pdf' else 'Ver texto' }}
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-base-content/50">Nenhuma decisao baixada.</p>
+        {% endif %}
+    </div>
+
+    <!-- Tab: PROMPT_MAX -->
+    <div x-show="tab === 'prompt'" class="bg-base-200 rounded-lg border border-base-300 p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-semibold">PROMPT_MAX.md</h3>
+            <button class="btn btn-ghost btn-xs" onclick="copiarPrompt()">Copiar</button>
+        </div>
+        {% if dados.prompt_max %}
+        <div id="prompt-content" class="prose prose-sm prose-invert max-w-none">
+            <pre class="whitespace-pre-wrap text-sm text-base-content/80 bg-base-300 p-4 rounded-lg max-h-[70vh] overflow-y-auto">{{ dados.prompt_max }}</pre>
+        </div>
+        {% else %}
+        <p class="text-base-content/50">PROMPT_MAX.md nao encontrado.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function copiarPrompt() {
+    var el = document.getElementById('prompt-content');
+    if (!el) return;
+    var text = el.innerText || el.textContent;
+    navigator.clipboard.writeText(text).then(function() {
+        showToast('PROMPT_MAX copiado', 'success');
+    }).catch(function() {
+        showToast('Erro ao copiar', 'error');
+    });
+}
+</script>
+{% endblock %}
