@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from config import ENTRADA_DIR, ESTADO_FILE
+from services.nomes_pecas import parse_nome_peca, CATEGORIAS_ORDEM, CATEGORIAS_LABEL
 
 
 def _ler_json(path: Path) -> dict | list | None:
@@ -91,31 +92,93 @@ def ler_paj(paj_norm: str) -> dict | None:
     prompt_max_path = pasta / "PROMPT_MAX.md"
     prompt_max = prompt_max_path.read_text(encoding="utf-8") if prompt_max_path.exists() else ""
 
-    # Lista de pecas
-    pecas: list[dict] = []
+    # Lista de pecas do processo (PDFs + TXTs baixados)
+    # Agrupa PDF+TXT do mesmo doc em um unico item, com nome legivel
+    pecas_map: dict[str, dict] = {}
     pecas_dir = pasta / "peças"
     if pecas_dir.exists():
         for f in sorted(pecas_dir.iterdir()):
-            if f.is_file():
-                pecas.append({
-                    "nome": f.name,
-                    "tipo": f.suffix.lstrip("."),
-                    "tamanho": f.stat().st_size,
-                    "caminho": f"peças/{f.name}",
-                })
+            if not f.is_file():
+                continue
+            meta = parse_nome_peca(f.name)
+            # Chave = nome sem extensao — agrupa .pdf e .txt do mesmo doc
+            chave = f.stem
+            if chave not in pecas_map:
+                pecas_map[chave] = {
+                    **meta,
+                    "nome_arquivo": chave,
+                    "pdf_caminho": None,
+                    "pdf_tamanho": 0,
+                    "txt_caminho": None,
+                    "txt_tamanho": 0,
+                }
+            if f.suffix.lower() == ".pdf":
+                pecas_map[chave]["pdf_caminho"] = f"peças/{f.name}"
+                pecas_map[chave]["pdf_tamanho"] = f.stat().st_size
+            elif f.suffix.lower() == ".txt":
+                pecas_map[chave]["txt_caminho"] = f"peças/{f.name}"
+                pecas_map[chave]["txt_tamanho"] = f.stat().st_size
 
-    # Lista de decisoes
+    # Ordena: primeiro por categoria (decisoes no topo), depois por data desc
+    ordem_cat = {c: i for i, c in enumerate(CATEGORIAS_ORDEM)}
+    pecas = sorted(
+        pecas_map.values(),
+        key=lambda p: (ordem_cat.get(p["categoria"], 99), -_ts(p.get("data", ""))),
+    )
+
+    # Agrupa por categoria pra renderizacao
+    pecas_por_categoria: list[dict] = []
+    for cat in CATEGORIAS_ORDEM:
+        itens = [p for p in pecas if p["categoria"] == cat]
+        if itens:
+            pecas_por_categoria.append({
+                "categoria": cat,
+                "label": CATEGORIAS_LABEL.get(cat, cat),
+                "cor": itens[0]["categoria_cor"],
+                "itens": itens,
+                "count": len(itens),
+            })
+
+    # Lista de decisoes STJ/STF (baixadas separadamente)
     decisoes: list[dict] = []
     decisoes_dir = pasta / "decisoes_superiores"
     if decisoes_dir.exists():
+        # Agrupa PDF+TXT
+        dec_map: dict[str, dict] = {}
         for f in sorted(decisoes_dir.iterdir()):
-            if f.is_file():
-                decisoes.append({
-                    "nome": f.name,
-                    "tipo": f.suffix.lstrip("."),
-                    "tamanho": f.stat().st_size,
-                    "caminho": f"decisoes_superiores/{f.name}",
-                })
+            if not f.is_file():
+                continue
+            chave = f.stem
+            tribunal = "STJ" if chave.startswith("STJ_") else ("STF" if chave.startswith("STF_") else "DEC")
+            if chave not in dec_map:
+                dec_map[chave] = {
+                    "nome_arquivo": chave,
+                    "tribunal": tribunal,
+                    "pdf_caminho": None, "pdf_tamanho": 0,
+                    "txt_caminho": None, "txt_tamanho": 0,
+                }
+            if f.suffix.lower() == ".pdf":
+                dec_map[chave]["pdf_caminho"] = f"decisoes_superiores/{f.name}"
+                dec_map[chave]["pdf_tamanho"] = f.stat().st_size
+            elif f.suffix.lower() == ".txt":
+                dec_map[chave]["txt_caminho"] = f"decisoes_superiores/{f.name}"
+                dec_map[chave]["txt_tamanho"] = f.stat().st_size
+        decisoes = list(dec_map.values())
+
+    # Pecas GERADAS pelo Claude (arquivos na RAIZ da pasta do PAJ)
+    # Ex: despacho.txt, recurso.docx, peca.pdf (exclui metadata/eventos/PROMPT_MAX)
+    IGNORAR = {"metadata.json", "eventos_tnu.json", "datajud.json", "PROMPT_MAX.md"}
+    pecas_geradas: list[dict] = []
+    for f in sorted(pasta.iterdir()):
+        if not f.is_file() or f.name in IGNORAR:
+            continue
+        pecas_geradas.append({
+            "nome": f.name,
+            "caminho": f.name,  # caminho relativo a pasta do PAJ
+            "tipo": f.suffix.lstrip(".").lower(),
+            "tamanho": f.stat().st_size,
+            "modificado": f.stat().st_mtime,
+        })
 
     # Movimentacoes
     det = metadata.get("detalhes_sisdpu", {}) or {}
@@ -126,11 +189,22 @@ def ler_paj(paj_norm: str) -> dict | None:
         "metadata": metadata,
         "prompt_max": prompt_max,
         "pecas": pecas,
+        "pecas_por_categoria": pecas_por_categoria,
         "decisoes": decisoes,
+        "pecas_geradas": pecas_geradas,
         "movimentacoes": movs_sorted,
         "prazos_abertos": metadata.get("prazos_abertos", []),
         "pasta": str(pasta),
     }
+
+
+def _ts(data_str: str) -> float:
+    """Converte '2018-08-14' em epoch; 0 se invalido. Usado em sort."""
+    try:
+        from datetime import datetime
+        return datetime.strptime(data_str, "%Y-%m-%d").timestamp()
+    except Exception:
+        return 0.0
 
 
 def ler_arquivo(paj_norm: str, caminho_relativo: str) -> tuple[Path | None, str]:

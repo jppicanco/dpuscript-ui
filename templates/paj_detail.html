@@ -110,6 +110,9 @@
         <a role="tab" class="tab" :class="tab === 'decisoes' && 'tab-active'" @click="tab = 'decisoes'">
             Decisoes <span class="badge badge-ghost badge-xs ml-1">{{ dados.decisoes|length }}</span>
         </a>
+        <a role="tab" class="tab" :class="tab === 'geradas' && 'tab-active'" @click="tab = 'geradas'">
+            Pecas Geradas <span class="badge badge-ghost badge-xs ml-1">{{ dados.pecas_geradas|length }}</span>
+        </a>
         <a role="tab" class="tab" :class="tab === 'prompt' && 'tab-active'" @click="tab = 'prompt'">PROMPT_MAX</a>
     </div>
 
@@ -167,11 +170,84 @@
         {% endif %}
     </div>
 
-    <!-- Tab: Pecas TNU -->
+    <!-- Tab: Pecas TNU (agrupadas por categoria, nomes legiveis) -->
     <div x-show="tab === 'pecas'" class="bg-base-200 rounded-lg border border-base-300 p-6">
-        <h3 class="text-lg font-semibold mb-4">Pecas TNU ({{ dados.pecas|length }})</h3>
-        {% if dados.pecas %}
-        <div class="overflow-x-auto">
+        <h3 class="text-lg font-semibold mb-4">
+            Pecas do processo
+            <span class="text-sm font-normal text-base-content/50">({{ dados.pecas|length }} documentos)</span>
+        </h3>
+        {% if dados.pecas_por_categoria %}
+            {% for grupo in dados.pecas_por_categoria %}
+            <div class="mb-5">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="badge badge-{{ grupo.cor }} badge-sm">{{ grupo.label }}</span>
+                    <span class="text-xs text-base-content/50">{{ grupo.count }}</span>
+                </div>
+                <div class="overflow-x-auto rounded-lg border border-base-300">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr class="bg-base-300/50 text-xs">
+                                <th>Documento</th>
+                                <th>Evento</th>
+                                <th>Data</th>
+                                <th>Tamanho</th>
+                                <th>Acoes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for peca in grupo.itens %}
+                            <tr class="hover:bg-base-300/30">
+                                <td>
+                                    <div class="font-medium text-sm">{{ peca.nome_legivel }}</div>
+                                    <div class="text-xs text-base-content/50 font-mono">
+                                        {{ peca.codigo }}{% if peca.sequencial %}{{ peca.sequencial }}{% endif %}
+                                    </div>
+                                </td>
+                                <td class="text-sm">ev{{ peca.evento }}</td>
+                                <td class="text-sm whitespace-nowrap">{{ peca.data or '—' }}</td>
+                                <td class="text-xs">
+                                    {% if peca.pdf_tamanho %}
+                                    <span class="badge badge-ghost badge-xs">PDF {{ (peca.pdf_tamanho / 1024)|round(0)|int }}KB</span>
+                                    {% endif %}
+                                    {% if peca.txt_tamanho %}
+                                    <span class="badge badge-ghost badge-xs">TXT {{ (peca.txt_tamanho / 1024)|round(0)|int }}KB</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <div class="flex gap-1">
+                                        {% if peca.pdf_caminho %}
+                                        <a href="/files/{{ paj_norm }}/{{ peca.pdf_caminho }}"
+                                           target="_blank"
+                                           class="btn btn-error btn-xs btn-outline">PDF</a>
+                                        {% endif %}
+                                        {% if peca.txt_caminho %}
+                                        <button class="btn btn-ghost btn-xs"
+                                                @click="verTxt('{{ paj_norm }}', '{{ peca.txt_caminho }}', '{{ peca.nome_legivel|e }}')">
+                                            Ler texto
+                                        </button>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+        <p class="text-base-content/50">Nenhuma peca baixada ainda. Execute o pipeline pra baixar.</p>
+        {% endif %}
+    </div>
+
+    <!-- Tab: Pecas Geradas (arquivos do Claude Elaborar Peca) -->
+    <div x-show="tab === 'geradas'" class="bg-base-200 rounded-lg border border-base-300 p-6">
+        <h3 class="text-lg font-semibold mb-4">
+            Pecas geradas pelo Claude
+            <span class="text-sm font-normal text-base-content/50">({{ dados.pecas_geradas|length }})</span>
+        </h3>
+        {% if dados.pecas_geradas %}
+        <div class="overflow-x-auto rounded-lg border border-base-300">
             <table class="table table-sm">
                 <thead>
                     <tr class="bg-base-300/50">
@@ -182,21 +258,30 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for peca in dados.pecas %}
+                    {% for p in dados.pecas_geradas %}
                     <tr class="hover:bg-base-300/30">
-                        <td class="font-mono text-xs">{{ peca.nome }}</td>
+                        <td class="font-mono text-sm">{{ p.nome }}</td>
                         <td>
-                            <span class="badge badge-sm {{ 'badge-error' if peca.tipo == 'pdf' else 'badge-ghost' }}">
-                                {{ peca.tipo|upper }}
+                            <span class="badge badge-sm {% if p.tipo == 'pdf' %}badge-error{% elif p.tipo == 'docx' %}badge-info{% else %}badge-ghost{% endif %}">
+                                {{ p.tipo|upper or 'FILE' }}
                             </span>
                         </td>
-                        <td class="text-sm">{{ (peca.tamanho / 1024)|round(1) }} KB</td>
+                        <td class="text-sm">{{ (p.tamanho / 1024)|round(1) }} KB</td>
                         <td>
-                            <a href="/files/{{ paj_norm }}/{{ peca.caminho }}"
-                               target="_blank"
-                               class="btn btn-ghost btn-xs">
-                                {{ 'Ver PDF' if peca.tipo == 'pdf' else 'Ver texto' }}
-                            </a>
+                            <div class="flex gap-1">
+                                {% if p.tipo in ('pdf', 'docx', 'doc') %}
+                                <a href="/files/{{ paj_norm }}/{{ p.caminho }}" target="_blank"
+                                   class="btn btn-primary btn-xs">Abrir</a>
+                                {% elif p.tipo in ('txt', 'md') %}
+                                <button class="btn btn-ghost btn-xs"
+                                        @click="verTxt('{{ paj_norm }}', '{{ p.caminho }}', '{{ p.nome|e }}')">
+                                    Ler
+                                </button>
+                                {% else %}
+                                <a href="/files/{{ paj_norm }}/{{ p.caminho }}" target="_blank"
+                                   class="btn btn-ghost btn-xs">Baixar</a>
+                                {% endif %}
+                            </div>
                         </td>
                     </tr>
                     {% endfor %}
@@ -204,20 +289,28 @@
             </table>
         </div>
         {% else %}
-        <p class="text-base-content/50">Nenhuma peca baixada.</p>
+        <div class="alert">
+            <div>
+                <p class="text-sm">Nenhuma peca foi gerada pelo Claude ainda para este PAJ.</p>
+                <p class="text-xs text-base-content/50 mt-1">Clique em <strong>Elaborar Peca</strong> no topo pra iniciar.</p>
+            </div>
+        </div>
         {% endif %}
     </div>
 
-    <!-- Tab: Decisoes -->
+    <!-- Tab: Decisoes STJ/STF -->
     <div x-show="tab === 'decisoes'" class="bg-base-200 rounded-lg border border-base-300 p-6">
-        <h3 class="text-lg font-semibold mb-4">Decisoes de tribunais superiores ({{ dados.decisoes|length }})</h3>
+        <h3 class="text-lg font-semibold mb-4">
+            Decisoes de tribunais superiores
+            <span class="text-sm font-normal text-base-content/50">({{ dados.decisoes|length }})</span>
+        </h3>
         {% if dados.decisoes %}
-        <div class="overflow-x-auto">
+        <div class="overflow-x-auto rounded-lg border border-base-300">
             <table class="table table-sm">
                 <thead>
                     <tr class="bg-base-300/50">
-                        <th>Arquivo</th>
-                        <th>Tipo</th>
+                        <th>Tribunal</th>
+                        <th>Identificador</th>
                         <th>Tamanho</th>
                         <th>Acoes</th>
                     </tr>
@@ -225,19 +318,31 @@
                 <tbody>
                     {% for dec in dados.decisoes %}
                     <tr class="hover:bg-base-300/30">
-                        <td class="font-mono text-xs">{{ dec.nome }}</td>
                         <td>
-                            <span class="badge badge-sm {{ 'badge-error' if dec.tipo == 'pdf' else 'badge-ghost' }}">
-                                {{ dec.tipo|upper }}
-                            </span>
+                            <span class="badge badge-warning badge-sm">{{ dec.tribunal }}</span>
                         </td>
-                        <td class="text-sm">{{ (dec.tamanho / 1024)|round(1) }} KB</td>
+                        <td class="font-mono text-xs">{{ dec.nome_arquivo }}</td>
+                        <td class="text-xs">
+                            {% if dec.pdf_tamanho %}
+                            <span class="badge badge-ghost badge-xs">PDF {{ (dec.pdf_tamanho / 1024)|round(0)|int }}KB</span>
+                            {% endif %}
+                            {% if dec.txt_tamanho %}
+                            <span class="badge badge-ghost badge-xs">TXT {{ (dec.txt_tamanho / 1024)|round(0)|int }}KB</span>
+                            {% endif %}
+                        </td>
                         <td>
-                            <a href="/files/{{ paj_norm }}/{{ dec.caminho }}"
-                               target="_blank"
-                               class="btn btn-ghost btn-xs">
-                                {{ 'Ver PDF' if dec.tipo == 'pdf' else 'Ver texto' }}
-                            </a>
+                            <div class="flex gap-1">
+                                {% if dec.pdf_caminho %}
+                                <a href="/files/{{ paj_norm }}/{{ dec.pdf_caminho }}" target="_blank"
+                                   class="btn btn-error btn-xs btn-outline">PDF</a>
+                                {% endif %}
+                                {% if dec.txt_caminho %}
+                                <button class="btn btn-ghost btn-xs"
+                                        @click="verTxt('{{ paj_norm }}', '{{ dec.txt_caminho }}', 'Decisao {{ dec.tribunal }}')">
+                                    Ler texto
+                                </button>
+                                {% endif %}
+                            </div>
                         </td>
                     </tr>
                     {% endfor %}
@@ -265,6 +370,23 @@
     </div>
 </div>
 
+<!-- Modal de leitura de TXT (peca baixada ou gerada) -->
+<dialog id="txt-modal" class="modal">
+    <div class="modal-box w-11/12 max-w-5xl">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="font-bold text-lg" id="txt-modal-title">Documento</h3>
+            <div class="flex gap-2">
+                <button class="btn btn-sm btn-ghost" onclick="copiarTxt()">Copiar</button>
+                <a id="txt-modal-pdf-link" href="#" target="_blank" class="btn btn-sm btn-ghost" style="display:none;">Ver PDF</a>
+                <form method="dialog"><button class="btn btn-sm btn-ghost">X</button></form>
+            </div>
+        </div>
+        <pre id="txt-modal-content"
+             class="whitespace-pre-wrap text-sm bg-base-300 p-4 rounded-lg max-h-[70vh] overflow-y-auto"></pre>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>fechar</button></form>
+</dialog>
+
 {% endblock %}
 
 {% block scripts %}
@@ -277,6 +399,41 @@ function copiarPrompt() {
         showToast('PROMPT_MAX copiado', 'success');
     }).catch(function() {
         showToast('Erro ao copiar', 'error');
+    });
+}
+
+async function verTxt(pajNorm, caminho, titulo) {
+    const modal = document.getElementById('txt-modal');
+    const content = document.getElementById('txt-modal-content');
+    const title = document.getElementById('txt-modal-title');
+    const pdfLink = document.getElementById('txt-modal-pdf-link');
+
+    title.textContent = titulo || 'Documento';
+    content.textContent = 'Carregando...';
+    pdfLink.style.display = 'none';
+
+    // Se caminho termina em .txt, tenta achar o .pdf correspondente
+    if (caminho.endsWith('.txt')) {
+        const pdfPath = caminho.slice(0, -4) + '.pdf';
+        pdfLink.href = '/files/' + pajNorm + '/' + pdfPath;
+        pdfLink.style.display = 'inline-flex';
+    }
+
+    modal.showModal();
+    try {
+        const resp = await fetch('/files/' + pajNorm + '/' + caminho);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        content.textContent = await resp.text();
+    } catch (e) {
+        content.textContent = 'Erro ao carregar: ' + e.message;
+    }
+}
+
+function copiarTxt() {
+    const el = document.getElementById('txt-modal-content');
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent).then(() => {
+        showToast('Copiado', 'success');
     });
 }
 </script>
