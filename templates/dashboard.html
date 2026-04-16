@@ -29,9 +29,10 @@
             </div>
         </div>
         <div class="flex gap-2">
-            <button class="btn btn-primary btn-sm"
-                    onclick="runPipeline('/api/pipeline/run', 'Pipeline completo')">
-                Rodar Pipeline
+            <button class="btn btn-primary btn-sm tooltip tooltip-left"
+                    data-tip="Verifica a caixa SISDPU, baixa PAJs novos/movimentados e as pecas do e-Proc TNU + decisoes STJ/STF"
+                    onclick="runPipeline('/api/pipeline/run', 'Verificar caixa SISDPU')">
+                Buscar novidades SISDPU
             </button>
         </div>
     </div>
