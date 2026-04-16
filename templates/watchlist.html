@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Acompanhamento de Transito{% endblock %}
+
+{% block content %}
+<div x-data="watchlistApp()" x-init="init()">
+
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+        <div>
+            <h2 class="text-2xl font-bold">Acompanhamento de Transito</h2>
+            <p class="text-sm text-base-content/60 mt-1">
+                PAJs arquivados por vitoria aguardando transito em julgado formal.
+                O sistema verifica periodicamente o e-Proc publico e alerta quando detecta.
+            </p>
+        </div>
+        <div class="flex gap-2 items-center">
+            <button class="btn btn-sm btn-outline"
+                    @click="verificarAgora()">
+                Verificar agora
+            </button>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div class="stat bg-base-200 rounded-lg border border-base-300 p-4">
+            <div class="stat-title text-xs">Total monitorando</div>
+            <div class="stat-value text-2xl" x-text="stats.total || 0"></div>
+        </div>
+        <div class="stat bg-base-200 rounded-lg border border-base-300 p-4">
+            <div class="stat-title text-xs">Ativos (aguardando)</div>
+            <div class="stat-value text-2xl text-warning" x-text="stats.ativo || 0"></div>
+        </div>
+        <div class="stat bg-base-200 rounded-lg border border-base-300 p-4">
+            <div class="stat-title text-xs">Transitou — finalizar!</div>
+            <div class="stat-value text-2xl text-success" x-text="stats.transitou || 0"></div>
+        </div>
+        <div class="stat bg-base-200 rounded-lg border border-base-300 p-4">
+            <div class="stat-title text-xs">Ultima atualizacao</div>
+            <div class="stat-value text-sm font-normal mt-2" x-text="formatTime(stats.atualizada_em)"></div>
+        </div>
+    </div>
+
+    <!-- Lista -->
+    <div class="overflow-x-auto rounded-lg border border-base-300 bg-base-200">
+        <table class="table table-sm">
+            <thead>
+                <tr class="bg-base-300/50">
+                    <th>PAJ</th>
+                    <th>CNJ</th>
+                    <th>Status</th>
+                    <th>Motivo</th>
+                    <th>Proxima verificacao</th>
+                    <th>Ultima verificacao</th>
+                    <th>Acoes</th>
+                </tr>
+            </thead>
+            <tbody>
+                <template x-for="item in itens" :key="item.paj">
+                    <tr class="hover:bg-base-300/30">
+                        <td>
+                            <a :href="'/paj/' + item.paj.replace('/', '-')"
+                               class="font-mono text-sm font-semibold text-primary hover:underline"
+                               x-text="item.paj"></a>
+                        </td>
+                        <td class="font-mono text-xs" x-text="item.cnj || '—'"></td>
+                        <td>
+                            <template x-if="item.status === 'transitou'">
+                                <span class="badge badge-success badge-sm">TRANSITOU</span>
+                            </template>
+                            <template x-if="item.status === 'ativo'">
+                                <span class="badge badge-warning badge-sm">aguardando</span>
+                            </template>
+                            <template x-if="item.status !== 'transitou' && item.status !== 'ativo'">
+                                <span class="badge badge-ghost badge-sm" x-text="item.status"></span>
+                            </template>
+                        </td>
+                        <td class="text-xs" x-text="(item.motivo || '').replaceAll('_',' ')"></td>
+                        <td class="text-sm" x-text="item.proxima_verificacao || '—'"></td>
+                        <td class="text-sm" x-text="item.ultima_verificacao ? formatDate(item.ultima_verificacao) : '—'"></td>
+                        <td>
+                            <button class="btn btn-ghost btn-xs"
+                                    @click="remover(item.paj)">
+                                Remover
+                            </button>
+                        </td>
+                    </tr>
+                </template>
+                <tr x-show="itens.length === 0">
+                    <td colspan="7" class="text-center py-8 text-base-content/50">
+                        Watchlist vazia. Adicione PAJs pelo detalhe de cada PAJ (botao "Acompanhar transito").
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function watchlistApp() {
+    return {
+        itens: [],
+        stats: {total: 0, ativo: 0, transitou: 0, atualizada_em: null},
+
+        async init() {
+            await this.carregar();
+            setInterval(() => this.carregar(), 10000);
+        },
+
+        async carregar() {
+            try {
+                const r = await fetch('/api/watchlist');
+                const data = await r.json();
+                this.itens = data.itens || [];
+                this.stats = data.stats || {};
+            } catch (e) {
+                // silencia
+            }
+        },
+
+        async verificarAgora() {
+            if (!confirm('Forcar verificacao de todos os PAJs agora? Pode demorar alguns minutos.')) return;
+            try {
+                await fetch('/api/watchlist/verify-now', {method: 'POST'});
+                showToast('Verificacao iniciada em background. Atualize em 1-2 min.', 'info');
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+        },
+
+        async remover(paj) {
+            if (!confirm('Remover ' + paj + ' da watchlist?')) return;
+            try {
+                await fetch('/api/watchlist/remove/' + encodeURIComponent(paj), {method: 'POST'});
+                await this.carregar();
+                showToast('Removido', 'success');
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+        },
+
+        formatDate(iso) {
+            if (!iso) return '';
+            try {
+                const d = new Date(iso);
+                return d.toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'});
+            } catch { return iso; }
+        },
+        formatTime(iso) {
+            if (!iso) return '—';
+            try {
+                return new Date(iso).toLocaleString('pt-BR');
+            } catch { return iso; }
+        }
+    };
+}
+</script>
+{% endblock %}

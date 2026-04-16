@@ -215,6 +215,66 @@ async function enviarCorrecao(pajNorm) {
     }
 }
 
+/* Acompanhar transito em julgado — na pagina do PAJ */
+function acompanharTransito(pajNorm, paj, cnj) {
+    return {
+        pajNorm: pajNorm,
+        paj: paj,
+        cnj: cnj,
+        item: null,
+        frequencia: 15,
+
+        async init() {
+            await this.fetch();
+            setInterval(() => this.fetch(), 15000);
+        },
+
+        async fetch() {
+            try {
+                const r = await fetch('/api/watchlist');
+                const data = await r.json();
+                const found = (data.itens || []).find(x => x.paj === this.paj);
+                this.item = found || null;
+            } catch (e) { /* silencia */ }
+        },
+
+        abrirDialog() {
+            document.getElementById('transito-dialog').showModal();
+        },
+
+        async adicionar() {
+            try {
+                const r = await fetch('/api/watchlist/add', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        paj: this.paj,
+                        cnj: this.cnj,
+                        frequencia_dias: parseInt(this.frequencia, 10),
+                    }),
+                });
+                if (!r.ok) throw new Error(r.status);
+                showToast('Adicionado ao monitoramento', 'success');
+                document.getElementById('transito-dialog').close();
+                await this.fetch();
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+        },
+
+        async remover() {
+            if (!confirm('Parar de acompanhar o transito deste PAJ?')) return;
+            try {
+                await fetch('/api/watchlist/remove/' + encodeURIComponent(this.paj), {method: 'POST'});
+                await this.fetch();
+                showToast('Removido do monitoramento', 'info');
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+        }
+    };
+}
+
 /* Elaborar Peca LEGADO — streaming SSE do Claude Code CLI (fluxo antigo) */
 var _claudeSource = null;
 

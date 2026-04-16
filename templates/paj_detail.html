@@ -56,6 +56,58 @@
         </div>
     </div>
 
+    <!-- Acompanhar transito (so se houver CNJ) -->
+    {% if meta.processo_judicial %}
+    <div x-data="acompanharTransito('{{ paj_norm }}', '{{ meta.paj }}', '{{ meta.processo_judicial }}')"
+         x-init="init()"
+         class="mt-3">
+        <div x-show="!item" class="flex items-center gap-2">
+            <button class="btn btn-ghost btn-xs" @click="abrirDialog()">
+                Acompanhar transito em julgado
+            </button>
+        </div>
+        <div x-show="item" class="alert alert-warning py-2">
+            <div class="flex items-center justify-between w-full">
+                <div class="text-sm">
+                    <template x-if="item && item.status === 'ativo'">
+                        <span>Acompanhando transito — proxima verificacao em <span x-text="item.proxima_verificacao"></span></span>
+                    </template>
+                    <template x-if="item && item.status === 'transitou'">
+                        <span class="font-bold">TRANSITOU em <span x-text="(item.transitou_em || '').substring(0,10)"></span> — finalize o arquivamento definitivo.</span>
+                    </template>
+                </div>
+                <button class="btn btn-ghost btn-xs" @click="remover()">Remover</button>
+            </div>
+        </div>
+
+        <!-- Modal de confirmacao -->
+        <dialog id="transito-dialog" class="modal">
+            <div class="modal-box">
+                <h3 class="font-bold">Acompanhar transito em julgado</h3>
+                <p class="text-sm text-base-content/70 mt-2 mb-4">
+                    O sistema vai verificar periodicamente o e-Proc publico pelo CNJ
+                    <span class="font-mono" x-text="cnj"></span> e te alertar via Telegram
+                    quando detectar transito em julgado ou baixa definitiva.
+                </p>
+                <label class="label">
+                    <span class="label-text text-sm">Verificar a cada:</span>
+                </label>
+                <select class="select select-bordered select-sm w-full" x-model="frequencia">
+                    <option value="7">7 dias</option>
+                    <option value="15" selected>15 dias</option>
+                    <option value="30">30 dias</option>
+                    <option value="60">60 dias</option>
+                </select>
+                <div class="modal-action">
+                    <form method="dialog"><button class="btn btn-ghost btn-sm">Cancelar</button></form>
+                    <button class="btn btn-primary btn-sm" @click="adicionar()">Adicionar</button>
+                </div>
+            </div>
+            <form method="dialog" class="modal-backdrop"><button>fechar</button></form>
+        </dialog>
+    </div>
+    {% endif %}
+
     <!-- Erro (se houver) -->
     <template x-data="elaborarApp('{{ paj_norm }}')" x-init="init()">
         <div x-show="status === 'error' && error" class="alert alert-error mt-4">

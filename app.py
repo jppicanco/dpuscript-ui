@@ -20,6 +20,7 @@ from routes.files import router as files_router
 from routes.pipeline import router as pipeline_router
 from routes.chat import router as chat_router
 from routes.pipeline_monitor import router as pipeline_monitor_router
+from routes.watchlist import router as watchlist_router
 
 BASE_DIR = Path(__file__).resolve().parent
 PID_FILE = BASE_DIR / ".server.pid"
@@ -38,6 +39,7 @@ app.include_router(files_router)
 app.include_router(pipeline_router)
 app.include_router(chat_router)
 app.include_router(pipeline_monitor_router)
+app.include_router(watchlist_router)
 
 
 def _cleanup_port(port: int) -> None:
