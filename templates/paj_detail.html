@@ -33,10 +33,9 @@
                     onclick="runPipeline('/api/pipeline/run/{{ paj_norm }}', 'Reprocessar {{ meta.paj }}')">
                 Reprocessar
             </button>
-            <button class="btn btn-sm btn-primary"
-                    onclick="elaborarPeca('{{ paj_norm }}')">
+            <a href="/chat/{{ paj_norm }}" class="btn btn-sm btn-primary">
                 Elaborar Peca
-            </button>
+            </a>
         </div>
     </div>
 </div>

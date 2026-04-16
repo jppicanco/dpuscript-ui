@@ -1,4 +1,4 @@
-"""Servico para executar Claude Code CLI como subprocess com streaming."""
+"""Servico para executar Claude Code CLI como subprocess com streaming (non-interactive)."""
 
 from __future__ import annotations
 
@@ -53,11 +53,9 @@ async def elaborar_peca(paj_norm: str) -> AsyncGenerator[str, None]:
                 stderr=subprocess.PIPE,
                 cwd=str(DPU_WORKSPACE),
             )
-            # Envia prompt via stdin e fecha
             proc.stdin.write(instrucao.encode("utf-8"))
             proc.stdin.close()
 
-            # Le output linha por linha (stream-json = 1 JSON por linha)
             for line in iter(proc.stdout.readline, b""):
                 text = line.decode("utf-8", errors="replace").strip()
                 if not text:
@@ -65,68 +63,34 @@ async def elaborar_peca(paj_norm: str) -> AsyncGenerator[str, None]:
                 try:
                     event = json.loads(text)
                     etype = event.get("type", "")
-                    subtype = event.get("subtype", "")
 
-                    # Mensagem parcial (texto chegando em tempo real)
-                    if etype == "content_block_delta":
-                        delta = event.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            q.put(delta.get("text", ""))
-
-                    # Mensagem completa do assistente (fallback se nao tem deltas)
-                    elif etype == "assistant":
-                        msg = event.get("message", {})
-                        content = msg.get("content", [])
-                        for block in content:
-                            if block.get("type") == "text":
-                                q.put(block.get("text", ""))
-
-                    # Tool use (mostra que Claude esta usando ferramentas)
-                    elif etype == "tool_use":
-                        tool_name = event.get("name", event.get("tool", "?"))
-                        q.put(f"\n[tool: {tool_name}] ")
-
-                    # Tool result
-                    elif etype == "tool_result":
-                        pass  # Nao mostra resultado de tools (muito verbose)
-
-                    # Resultado final
+                    if etype == "stream_event":
+                        inner = event.get("event", {})
+                        if inner.get("type") == "content_block_delta":
+                            delta = inner.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                q.put(delta.get("text", ""))
+                        elif inner.get("type") == "content_block_start":
+                            block = inner.get("content_block", {})
+                            if block.get("type") == "tool_use":
+                                q.put(f"\n[tool: {block.get('name', '?')}] ")
                     elif etype == "result":
-                        # Extrai texto do resultado se nao veio via deltas
-                        result_text = ""
-                        result = event.get("result", "")
-                        if isinstance(result, str) and result:
-                            result_text = result
-                        elif isinstance(result, dict):
-                            result_text = result.get("text", "")
-
+                        result_text = event.get("result", "")
+                        if isinstance(result_text, dict):
+                            result_text = result_text.get("text", "")
                         if result_text:
                             q.put(f"\n\n{result_text}")
-
-                        cost = event.get("cost_usd")
                         session_id = event.get("session_id", "")
-                        q.put(f"\n\n[dpuscript-ui] Concluido (session={session_id[:8]})")
-                        if cost:
-                            q.put(f" | custo=${cost:.4f}")
-                        q.put("\n")
-
-                    # System events (hooks, etc) — ignora silenciosamente
-                    elif etype == "system":
-                        pass
-
+                        q.put(f"\n\n[dpuscript-ui] Concluido (session={session_id[:8]})\n")
                 except json.JSONDecodeError:
-                    # Linha nao-JSON (possivel log ou erro)
                     q.put(text + "\n")
 
-            # Captura stderr
             stderr_out = proc.stderr.read().decode("utf-8", errors="replace").strip()
             proc.wait()
-
             if proc.returncode != 0:
                 q.put(f"\n[ERRO] Claude Code saiu com codigo {proc.returncode}\n")
                 if stderr_out:
                     q.put(f"[stderr] {stderr_out[:500]}\n")
-
         except FileNotFoundError:
             q.put("[ERRO] Comando 'claude' nao encontrado no PATH.\n")
         except Exception as e:
@@ -143,7 +107,6 @@ async def elaborar_peca(paj_norm: str) -> AsyncGenerator[str, None]:
         except queue.Empty:
             await asyncio.sleep(0.05)
             continue
-
         if chunk is None:
             break
         yield chunk
