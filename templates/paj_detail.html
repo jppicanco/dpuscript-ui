@@ -159,11 +159,17 @@
         <a role="tab" class="tab" :class="tab === 'pecas' && 'tab-active'" @click="tab = 'pecas'">
             Pecas TNU <span class="badge badge-ghost badge-xs ml-1">{{ dados.pecas|length }}</span>
         </a>
-        <a role="tab" class="tab" :class="tab === 'decisoes' && 'tab-active'" @click="tab = 'decisoes'">
-            Decisoes <span class="badge badge-ghost badge-xs ml-1">{{ dados.decisoes|length }}</span>
+        <a role="tab" class="tab" :class="tab === 'decisoes' && 'tab-active'" @click="tab = 'decisoes'"
+           title="Decisoes emitidas pela TNU/STJ apos chegada do processo (ev2+) + decisoes STJ/STF baixadas separadamente">
+            Dec. Superiores <span class="badge badge-ghost badge-xs ml-1">{{ dados.decisoes|length }}</span>
         </a>
-        <a role="tab" class="tab" :class="tab === 'geradas' && 'tab-active'" @click="tab = 'geradas'">
-            Pecas Geradas <span class="badge badge-ghost badge-xs ml-1">{{ dados.pecas_geradas|length }}</span>
+        <a role="tab" class="tab" :class="tab === 'pecas' && 'tab-active'" @click="tab = 'pecas'"
+           title="Pecas judiciais geradas pelo Claude (recursos, agravos, embargos, memoriais...)">
+            Pecas <span class="badge badge-ghost badge-xs ml-1">{{ dados.pecas_judiciais|length }}</span>
+        </a>
+        <a role="tab" class="tab" :class="tab === 'despachos' && 'tab-active'" @click="tab = 'despachos'"
+           title="Despachos administrativos para lancamento no SISDPU">
+            Despachos <span class="badge badge-ghost badge-xs ml-1">{{ dados.despachos|length }}</span>
         </a>
         <a role="tab" class="tab" :class="tab === 'prompt' && 'tab-active'" @click="tab = 'prompt'">PROMPT_MAX</a>
     </div>
@@ -292,25 +298,20 @@
         {% endif %}
     </div>
 
-    <!-- Tab: Pecas Geradas (arquivos do Claude Elaborar Peca) -->
-    <div x-show="tab === 'geradas'" class="bg-base-200 rounded-lg border border-base-300 p-6">
-        <h3 class="text-lg font-semibold mb-4">
-            Pecas geradas pelo Claude
-            <span class="text-sm font-normal text-base-content/50">({{ dados.pecas_geradas|length }})</span>
-        </h3>
-        {% if dados.pecas_geradas %}
+    <!-- Tab: Pecas Judiciais -->
+    <div x-show="tab === 'pecas'" class="bg-base-200 rounded-lg border border-base-300 p-6">
+        <h3 class="text-lg font-semibold mb-1">Pecas judiciais geradas</h3>
+        <p class="text-xs text-base-content/40 mb-4">Recursos, agravos, embargos, memoriais — documentos protocolados no processo judicial. Clique em <strong>Elaborar Peca</strong> no topo para gerar.</p>
+        {% if dados.pecas_judiciais %}
         <div class="overflow-x-auto rounded-lg border border-base-300">
             <table class="table table-sm">
                 <thead>
                     <tr class="bg-base-300/50">
-                        <th>Arquivo</th>
-                        <th>Tipo</th>
-                        <th>Tamanho</th>
-                        <th>Acoes</th>
+                        <th>Arquivo</th><th>Tipo</th><th>Tamanho</th><th>Acoes</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for p in dados.pecas_geradas %}
+                    {% for p in dados.pecas_judiciais %}
                     <tr class="hover:bg-base-300/30">
                         <td class="font-mono text-sm">{{ p.nome }}</td>
                         <td>
@@ -326,9 +327,7 @@
                                    class="btn btn-primary btn-xs">Abrir</a>
                                 {% elif p.tipo in ('txt', 'md') %}
                                 <button class="btn btn-ghost btn-xs"
-                                        @click="verTxt('{{ paj_norm }}', '{{ p.caminho }}', '{{ p.nome|e }}')">
-                                    Ler
-                                </button>
+                                        @click="verTxt('{{ paj_norm }}', '{{ p.caminho }}', '{{ p.nome|e }}')">Ler</button>
                                 {% else %}
                                 <a href="/files/{{ paj_norm }}/{{ p.caminho }}" target="_blank"
                                    class="btn btn-ghost btn-xs">Baixar</a>
@@ -343,26 +342,76 @@
         {% else %}
         <div class="alert">
             <div>
-                <p class="text-sm">Nenhuma peca foi gerada pelo Claude ainda para este PAJ.</p>
-                <p class="text-xs text-base-content/50 mt-1">Clique em <strong>Elaborar Peca</strong> no topo pra iniciar.</p>
+                <p class="text-sm">Nenhuma peca judicial gerada ainda para este PAJ.</p>
+                <p class="text-xs text-base-content/50 mt-1">Clique em <strong>Elaborar Peca</strong> no topo para iniciar.</p>
             </div>
         </div>
         {% endif %}
     </div>
 
-    <!-- Tab: Decisoes STJ/STF -->
+    <!-- Tab: Despachos SISDPU -->
+    <div x-show="tab === 'despachos'" class="bg-base-200 rounded-lg border border-base-300 p-6">
+        <h3 class="text-lg font-semibold mb-1">Despachos SISDPU</h3>
+        <p class="text-xs text-base-content/40 mb-4">Despachos administrativos para lancamento na movimentacao do SISDPU.</p>
+        {% if dados.despachos %}
+        <div class="overflow-x-auto rounded-lg border border-base-300">
+            <table class="table table-sm">
+                <thead>
+                    <tr class="bg-base-300/50">
+                        <th>Arquivo</th><th>Tipo</th><th>Tamanho</th><th>Acoes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in dados.despachos %}
+                    <tr class="hover:bg-base-300/30">
+                        <td class="font-mono text-sm">{{ p.nome }}</td>
+                        <td>
+                            <span class="badge badge-sm {% if p.tipo == 'pdf' %}badge-error{% elif p.tipo == 'docx' %}badge-info{% else %}badge-ghost{% endif %}">
+                                {{ p.tipo|upper or 'FILE' }}
+                            </span>
+                        </td>
+                        <td class="text-sm">{{ (p.tamanho / 1024)|round(1) }} KB</td>
+                        <td>
+                            <div class="flex gap-1">
+                                {% if p.tipo in ('pdf', 'docx', 'doc') %}
+                                <a href="/files/{{ paj_norm }}/{{ p.caminho }}" target="_blank"
+                                   class="btn btn-primary btn-xs">Abrir</a>
+                                {% elif p.tipo in ('txt', 'md') %}
+                                <button class="btn btn-ghost btn-xs"
+                                        @click="verTxt('{{ paj_norm }}', '{{ p.caminho }}', '{{ p.nome|e }}')">Ler</button>
+                                {% else %}
+                                <a href="/files/{{ paj_norm }}/{{ p.caminho }}" target="_blank"
+                                   class="btn btn-ghost btn-xs">Baixar</a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert">
+            <p class="text-sm">Nenhum despacho gerado ainda para este PAJ.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Tab: Decisoes Superiores (TNU/STJ/STF) -->
     <div x-show="tab === 'decisoes'" class="bg-base-200 rounded-lg border border-base-300 p-6">
-        <h3 class="text-lg font-semibold mb-4">
-            Decisoes de tribunais superiores
+        <h3 class="text-lg font-semibold mb-1">
+            Decisoes emitidas apos chegada ao tribunal superior
             <span class="text-sm font-normal text-base-content/50">({{ dados.decisoes|length }})</span>
         </h3>
+        <p class="text-xs text-base-content/40 mb-4">Inclui despachos e decisoes TNU/STJ de ev2 em diante. Documentos do pacote inicial (ev1 — sentenca de origem, acordao TRF, etc.) ficam em Pecas TNU.</p>
         {% if dados.decisoes %}
         <div class="overflow-x-auto rounded-lg border border-base-300">
             <table class="table table-sm">
                 <thead>
                     <tr class="bg-base-300/50">
                         <th>Tribunal</th>
-                        <th>Identificador</th>
+                        <th>Documento</th>
+                        <th>Data</th>
                         <th>Tamanho</th>
                         <th>Acoes</th>
                     </tr>
@@ -373,7 +422,11 @@
                         <td>
                             <span class="badge badge-warning badge-sm">{{ dec.tribunal }}</span>
                         </td>
-                        <td class="font-mono text-xs">{{ dec.nome_arquivo }}</td>
+                        <td>
+                            <div class="font-medium text-sm">{{ dec.nome_legivel or dec.nome_arquivo }}</div>
+                            <div class="font-mono text-xs text-base-content/40">{{ dec.nome_arquivo }}</div>
+                        </td>
+                        <td class="text-xs text-base-content/60">{{ dec.data or "—" }}</td>
                         <td class="text-xs">
                             {% if dec.pdf_tamanho %}
                             <span class="badge badge-ghost badge-xs">PDF {{ (dec.pdf_tamanho / 1024)|round(0)|int }}KB</span>
@@ -390,7 +443,7 @@
                                 {% endif %}
                                 {% if dec.txt_caminho %}
                                 <button class="btn btn-ghost btn-xs"
-                                        @click="verTxt('{{ paj_norm }}', '{{ dec.txt_caminho }}', 'Decisao {{ dec.tribunal }}')">
+                                        @click="verTxt('{{ paj_norm }}', '{{ dec.txt_caminho }}', '{{ dec.nome_legivel or dec.tribunal }}')">
                                     Ler texto
                                 </button>
                                 {% endif %}

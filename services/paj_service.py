@@ -48,7 +48,13 @@ def listar_pajs() -> list[dict]:
         pecas_dir = pasta / "peças"
         decisoes_dir = pasta / "decisoes_superiores"
         n_pecas = sum(1 for f in pecas_dir.glob("*.txt")) if pecas_dir.exists() else 0
+        # Decisoes = STJ/STF baixadas separadamente + decisoes TNU emitidas apos ev1
         n_decisoes = sum(1 for f in decisoes_dir.glob("*.txt")) if decisoes_dir.exists() else 0
+        if pecas_dir.exists():
+            for f in pecas_dir.glob("*.txt"):
+                m = parse_nome_peca(f.name)
+                if m["categoria"] == "decisoes" and m["evento"] > 1:
+                    n_decisoes += 1
 
         # Extrai movimentacoes recentes (top 3 por seq desc)
         det = metadata.get("detalhes_sisdpu", {}) or {}
@@ -139,11 +145,28 @@ def ler_paj(paj_norm: str) -> dict | None:
                 "count": len(itens),
             })
 
-    # Lista de decisoes STJ/STF (baixadas separadamente)
+    # Lista de decisoes superiores:
+    #   (a) decisoes TNU/STJ do proprio processo — pecas com categoria "decisoes" e evento > 1
+    #   (b) decisoes STJ/STF baixadas separadamente (pasta decisoes_superiores/)
+    # ev1 = pacote inicial (sentenca de origem, acordao TRF, etc.) — nao conta aqui
     decisoes: list[dict] = []
+
+    for p in pecas:
+        if p["categoria"] == "decisoes" and p.get("evento", 0) > 1:
+            decisoes.append({
+                "nome_arquivo": p["nome_arquivo"],
+                "nome_legivel": p["nome_legivel"],
+                "tribunal": "TNU",
+                "data": p.get("data", ""),
+                "evento": p.get("evento", 0),
+                "pdf_caminho": p["pdf_caminho"],
+                "pdf_tamanho": p["pdf_tamanho"],
+                "txt_caminho": p["txt_caminho"],
+                "txt_tamanho": p["txt_tamanho"],
+            })
+
     decisoes_dir = pasta / "decisoes_superiores"
     if decisoes_dir.exists():
-        # Agrupa PDF+TXT
         dec_map: dict[str, dict] = {}
         for f in sorted(decisoes_dir.iterdir()):
             if not f.is_file():
@@ -153,7 +176,10 @@ def ler_paj(paj_norm: str) -> dict | None:
             if chave not in dec_map:
                 dec_map[chave] = {
                     "nome_arquivo": chave,
+                    "nome_legivel": chave,
                     "tribunal": tribunal,
+                    "data": "",
+                    "evento": 0,
                     "pdf_caminho": None, "pdf_tamanho": 0,
                     "txt_caminho": None, "txt_tamanho": 0,
                 }
@@ -163,22 +189,35 @@ def ler_paj(paj_norm: str) -> dict | None:
             elif f.suffix.lower() == ".txt":
                 dec_map[chave]["txt_caminho"] = f"decisoes_superiores/{f.name}"
                 dec_map[chave]["txt_tamanho"] = f.stat().st_size
-        decisoes = list(dec_map.values())
+        decisoes.extend(dec_map.values())
 
-    # Pecas GERADAS pelo Claude (arquivos na RAIZ da pasta do PAJ)
-    # Ex: despacho.txt, recurso.docx, peca.pdf (exclui metadata/eventos/PROMPT_MAX)
+    # Ordena: mais recente primeiro
+    decisoes.sort(key=lambda d: (d.get("data") or ""), reverse=True)
+
+    # Arquivos gerados pelo Claude na raiz da pasta do PAJ.
+    # Separados em duas listas:
+    #   despachos  — documentos administrativos para o SISDPU (despacho*.txt/docx/pdf)
+    #   pecas_judiciais — peças processuais de fato (recursos, agravos, embargos, memoriais…)
     IGNORAR = {"metadata.json", "eventos_tnu.json", "datajud.json", "PROMPT_MAX.md", "elaboracao.json"}
-    pecas_geradas: list[dict] = []
+    PREFIXOS_DESPACHO = ("despacho",)
+
+    despachos: list[dict] = []
+    pecas_judiciais: list[dict] = []
+
     for f in sorted(pasta.iterdir()):
         if not f.is_file() or f.name in IGNORAR:
             continue
-        pecas_geradas.append({
+        item = {
             "nome": f.name,
-            "caminho": f.name,  # caminho relativo a pasta do PAJ
+            "caminho": f.name,
             "tipo": f.suffix.lstrip(".").lower(),
             "tamanho": f.stat().st_size,
             "modificado": f.stat().st_mtime,
-        })
+        }
+        if f.name.lower().startswith(PREFIXOS_DESPACHO):
+            despachos.append(item)
+        else:
+            pecas_judiciais.append(item)
 
     # Movimentacoes
     det = metadata.get("detalhes_sisdpu", {}) or {}
@@ -191,7 +230,10 @@ def ler_paj(paj_norm: str) -> dict | None:
         "pecas": pecas,
         "pecas_por_categoria": pecas_por_categoria,
         "decisoes": decisoes,
-        "pecas_geradas": pecas_geradas,
+        "despachos": despachos,
+        "pecas_judiciais": pecas_judiciais,
+        # compatibilidade legada — soma dos dois
+        "pecas_geradas": despachos + pecas_judiciais,
         "movimentacoes": movs_sorted,
         "prazos_abertos": metadata.get("prazos_abertos", []),
         "pasta": str(pasta),
