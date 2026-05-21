@@ -10,7 +10,28 @@ from pathlib import Path
 
 from config import DPU_WORKSPACE, ENTRADA_DIR
 
-CLAUDE_CMD = "claude"
+import shutil as _shutil
+import os as _os
+
+# Resolve claude CLI: tenta PATH primeiro, fallback pros locais conhecidos
+def _resolver_claude_cmd() -> str:
+    achado = _shutil.which("claude") or _shutil.which("claude.cmd")
+    if achado:
+        return achado
+    # Fallback Windows npm global
+    candidatos = [
+        _os.path.expandvars(r"%APPDATA%\npm\claude.cmd"),
+        _os.path.expandvars(r"%APPDATA%\npm\claude"),
+        _os.path.expanduser(r"~\.local\bin\claude"),
+        r"C:\Program Files\nodejs\claude.cmd",
+    ]
+    for c in candidatos:
+        if c and _os.path.exists(c):
+            return c
+    return "claude"  # último recurso — vai falhar com erro claro
+
+
+CLAUDE_CMD = _resolver_claude_cmd()
 
 
 class ChatSession:

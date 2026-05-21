@@ -165,7 +165,7 @@
            title="Decisoes emitidas pela TNU/STJ apos chegada do processo (ev2+) + decisoes STJ/STF baixadas separadamente">
             Dec. Superiores <span class="badge badge-ghost badge-xs ml-1">{{ dados.decisoes|length }}</span>
         </a>
-        <a role="tab" class="tab" :class="tab === 'pecas' && 'tab-active'" @click="tab = 'pecas'"
+        <a role="tab" class="tab" :class="tab === 'pecas_judiciais' && 'tab-active'" @click="tab = 'pecas_judiciais'"
            title="Pecas judiciais geradas pelo Claude (recursos, agravos, embargos, memoriais...)">
             Pecas <span class="badge badge-ghost badge-xs ml-1">{{ dados.pecas_judiciais|length }}</span>
         </a>
@@ -372,7 +372,7 @@
     </div>
 
     <!-- Tab: Pecas Judiciais -->
-    <div x-show="tab === 'pecas'" class="bg-base-200 rounded-lg border border-base-300 p-6">
+    <div x-show="tab === 'pecas_judiciais'" class="bg-base-200 rounded-lg border border-base-300 p-6">
         <h3 class="text-lg font-semibold mb-1">Pecas judiciais geradas</h3>
         <p class="text-xs text-base-content/40 mb-4">Recursos, agravos, embargos, memoriais — documentos protocolados no processo judicial. Clique em <strong>Elaborar Peca</strong> no topo para gerar.</p>
         {% if dados.pecas_judiciais %}
