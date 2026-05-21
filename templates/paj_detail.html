@@ -231,6 +231,32 @@
                                     <button class="btn btn-sm btn-primary" @click="salvar()" :disabled="!nova || !razao">Salvar correção</button>
                                     <span x-text="msg" class="text-xs self-center" :class="erro ? 'text-error' : 'text-success'"></span>
                                 </div>
+
+                                <div class="divider text-xs">OU peça pro Grok extrair pra você</div>
+
+                                <div x-data="feedbackLivre('{{ paj_norm }}')" x-init="init()">
+                                    <label class="text-xs text-base-content/60">Diga em palavras simples por que está errado:</label>
+                                    <textarea class="textarea textarea-bordered textarea-sm w-full" rows="2" x-model="msgLivre" placeholder="Ex: Essa decisão é do Presidente da TNU, não cabe agravo interno"></textarea>
+                                    <div class="flex gap-2 mt-2">
+                                        <button class="btn btn-sm btn-accent" @click="pedirAjuda()" :disabled="!msgLivre || carregando">
+                                            <span x-show="!carregando">Grok, extraia pra mim</span>
+                                            <span x-show="carregando" class="loading loading-spinner loading-xs"></span>
+                                        </button>
+                                        <span x-text="erroLivre" class="text-xs self-center text-error"></span>
+                                    </div>
+                                    <div x-show="propostaOk" style="display:none" class="mt-3 p-3 bg-base-300 rounded text-xs space-y-1">
+                                        <div><b>Grok propõe:</b></div>
+                                        <div>classif: <code x-text="proposta.classif_correta"></code></div>
+                                        <div>razão: <span x-text="proposta.razao_curta"></span></div>
+                                        <div x-show="proposta.padrao_regex_sugerido">regex: <code x-text="proposta.padrao_regex_sugerido"></code></div>
+                                        <div>confiança: <span x-text="proposta.confianca"></span></div>
+                                        <div class="flex gap-2 mt-2">
+                                            <button class="btn btn-xs btn-primary" @click="aplicar(false)">Aceitar (só este PAJ)</button>
+                                            <button class="btn btn-xs btn-success" @click="aplicar(true)" x-show="proposta.padrao_regex_sugerido">Aceitar + Ensinar regra geral</button>
+                                            <button class="btn btn-xs btn-ghost" @click="propostaOk = false">Descartar</button>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </td></tr>
@@ -645,6 +671,60 @@
 
 {% block scripts %}
 <script>
+function feedbackLivre(pajNorm) {
+    return {
+        pajNorm: pajNorm,
+        msgLivre: '',
+        carregando: false,
+        proposta: {},
+        propostaOk: false,
+        erroLivre: '',
+        init() {},
+        async pedirAjuda() {
+            if (!this.msgLivre.trim()) return;
+            this.carregando = true;
+            this.erroLivre = '';
+            this.propostaOk = false;
+            try {
+                const fd = new FormData();
+                fd.append('mensagem', this.msgLivre);
+                const r = await fetch('/api/feedback/' + this.pajNorm, { method: 'POST', body: fd });
+                const d = await r.json();
+                if (d.ok) {
+                    this.proposta = d;
+                    this.propostaOk = true;
+                } else {
+                    this.erroLivre = d.erro || 'erro desconhecido';
+                }
+            } catch (e) {
+                this.erroLivre = 'erro: ' + e.message;
+            } finally {
+                this.carregando = false;
+            }
+        },
+        async aplicar(ensinarGeral) {
+            const fd = new FormData();
+            fd.append('classif_correta', this.proposta.classif_correta);
+            fd.append('razao', this.proposta.razao_curta);
+            if (ensinarGeral && this.proposta.padrao_regex_sugerido) {
+                fd.append('padrao_regex', this.proposta.padrao_regex_sugerido);
+            }
+            try {
+                const r = await fetch('/api/correcao/' + this.pajNorm, { method: 'POST', body: fd });
+                if (r.ok) {
+                    if (typeof showToast === 'function') showToast(ensinarGeral ? 'Aplicado + regra geral aprendida' : 'Aplicado neste PAJ', 'success');
+                    setTimeout(() => location.reload(), 800);
+                } else {
+                    const d = await r.json();
+                    this.erroLivre = 'erro ao salvar: ' + (d.detail || 'desconhecido');
+                }
+            } catch (e) {
+                this.erroLivre = 'erro: ' + e.message;
+            }
+        }
+    };
+}
+
 function corrigirClassif(pajNorm, atual, pajOriginal) {
     return {
         pajNorm: pajNorm,

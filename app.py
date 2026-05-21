@@ -24,6 +24,7 @@ from routes.watchlist import router as watchlist_router
 from routes.sisdpu import router as sisdpu_router
 from routes.sync import router as sync_router
 from routes.correcao import router as correcao_router
+from routes.feedback import router as feedback_router
 
 BASE_DIR = Path(__file__).resolve().parent
 PID_FILE = BASE_DIR / ".server.pid"
@@ -46,6 +47,7 @@ app.include_router(watchlist_router)
 app.include_router(sisdpu_router)
 app.include_router(sync_router)
 app.include_router(correcao_router)
+app.include_router(feedback_router)
 
 
 def _cleanup_port(port: int) -> None:
