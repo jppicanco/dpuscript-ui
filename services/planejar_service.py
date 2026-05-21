@@ -22,12 +22,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
 
 from config import ENTRADA_DIR
 from services.chat_service import CLAUDE_CMD
+
+
+def _env_sem_claudecode() -> dict:
+    """Clone do env sem CLAUDECODE — evita 'Claude inside another Claude' error."""
+    env = os.environ.copy()
+    for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"):
+        env.pop(k, None)
+    return env
 
 
 def _ler_resumo_curto(pasta: Path) -> str:
@@ -136,6 +145,7 @@ async def planejar_elaboracao(paj_norm: str, timeout: int = 120) -> dict:
             errors="replace",
             timeout=timeout,
             cwd=str(pasta),
+            env=_env_sem_claudecode(),
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "erro": "Timeout chamando Claude CLI"}

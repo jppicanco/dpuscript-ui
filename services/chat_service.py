@@ -70,12 +70,19 @@ class ChatSession:
         ]
 
         try:
+            # Limpa env CLAUDECODE pra subprocess Claude não detectar
+            # parent como Claude Code session (que rejeita nested launch)
+            env = _os.environ.copy()
+            for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"):
+                env.pop(k, None)
+
             self.proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=str(DPU_WORKSPACE),
+                env=env,
             )
             self._alive = True
 
