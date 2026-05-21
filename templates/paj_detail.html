@@ -697,10 +697,18 @@
             <button class="btn btn-sm btn-ghost" @click="aberto=false">X</button>
         </div>
 
-        <!-- Loading -->
+        <!-- Loading planejamento -->
         <div x-show="carregando" class="text-center py-8">
             <span class="loading loading-spinner loading-lg"></span>
             <p class="mt-3 text-sm text-base-content/60">Claude analisando o caso (~60s)...</p>
+        </div>
+
+        <!-- Elaborando (após aprovar) -->
+        <div x-show="elaborando" style="display:none" class="text-center py-12 space-y-4">
+            <span class="loading loading-spinner loading-lg text-primary"></span>
+            <h3 class="text-xl font-bold">Claude está executando o plano</h3>
+            <p class="text-base text-base-content/70" x-text="elaboracaoStatus"></p>
+            <p class="text-xs text-base-content/40">Pode demorar 2-5 minutos. Modal vai recarregar sozinho ao terminar.</p>
         </div>
 
         <!-- Erro -->
@@ -710,7 +718,7 @@
         </div>
 
         <!-- Plano -->
-        <div x-show="!carregando && plano" style="display:none" class="space-y-4">
+        <div x-show="!carregando && !elaborando && plano" style="display:none" class="space-y-4">
             <!-- BANNER plano resumido (destaque) -->
             <div class="bg-primary/15 border-2 border-primary rounded-lg p-4">
                 <div class="text-xs uppercase tracking-wider text-primary font-bold">Plano proposto pelo Claude</div>
@@ -842,6 +850,9 @@ function planoApp(pajNorm, paj, proc) {
         plano: null,
         erro: '',
         feedbackMsg: '',
+        elaborando: false,           // após aprovar, fica true até Claude terminar
+        elaboracaoStatus: '',
+        _pollTimer: null,
 
         async init() {
             try {
@@ -918,12 +929,36 @@ function planoApp(pajNorm, paj, proc) {
                     this.erro = 'erro salvando plano';
                     return;
                 }
+                // Dispara elaboração e entra em modo "elaborando" (modal continua aberto com spinner)
                 await fetch('/api/elaborar/start/' + this.pajNorm, {method: 'POST'});
-                this.aberto = false;
-                if (typeof showToast === 'function') showToast('Claude iniciou atuação com o plano aprovado', 'success');
+                this.elaborando = true;
+                this.elaboracaoStatus = 'Claude iniciou atuação. Aguarde...';
+                this.startPollElaboracao();
             } catch (e) {
                 this.erro = 'falha: ' + e.message;
             }
+        },
+
+        startPollElaboracao() {
+            if (this._pollTimer) return;
+            this._pollTimer = setInterval(async () => {
+                try {
+                    const r = await fetch('/api/elaborar/status/' + this.pajNorm);
+                    const d = await r.json();
+                    if (d.last_action) this.elaboracaoStatus = d.last_action;
+                    if (d.status === 'done') {
+                        clearInterval(this._pollTimer);
+                        this._pollTimer = null;
+                        this.elaboracaoStatus = 'Concluído! Recarregando...';
+                        setTimeout(() => location.reload(), 1500);
+                    } else if (d.status === 'error') {
+                        clearInterval(this._pollTimer);
+                        this._pollTimer = null;
+                        this.elaborando = false;
+                        this.erro = 'Claude falhou: ' + (d.error || 'erro desconhecido');
+                    }
+                } catch (e) { /* tenta de novo no próximo tick */ }
+            }, 3000);
         }
     };
 }

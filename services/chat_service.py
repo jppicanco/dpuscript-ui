@@ -344,6 +344,7 @@ def ler_elaboracao_disco(paj_norm: str) -> dict | None:
             "resumo_curto.md",        # gerado pelo pipeline (R3)
             "prazos_detectados.json", # gerado pelo pipeline (módulo prazos)
             "resumo.md",              # legado
+            "plano_elaboracao.json",  # plano R7 — metadata
         }
         gerados = [x for x in pasta.iterdir() if x.is_file() and x.name not in IGNORAR]
         if gerados:

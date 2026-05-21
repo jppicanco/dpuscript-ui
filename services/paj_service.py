@@ -207,6 +207,7 @@ def ler_paj(paj_norm: str) -> dict | None:
         "resumo_curto.md",         # artefato do pipeline (R3) — não é peça
         "prazos_detectados.json",  # artefato do módulo prazos — não é peça
         "resumo.md",                # legado
+        "plano_elaboracao.json",   # plano R7 — metadata, não é peça
     }
     PREFIXOS_DESPACHO = ("despacho",)
 
