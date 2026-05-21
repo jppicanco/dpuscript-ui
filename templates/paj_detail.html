@@ -16,7 +16,12 @@
 
     <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
-            <h2 class="text-2xl font-bold">PAJ {{ meta.paj }}</h2>
+            <h2 class="text-2xl font-bold">
+                PAJ {{ meta.paj }}
+                {% if meta.processo_judicial %}
+                <span class="text-base text-base-content/60 font-mono ml-3">· proc. {{ meta.processo_judicial }}</span>
+                {% endif %}
+            </h2>
             <p class="text-lg text-base-content/80 mt-1">{{ meta.assistido_caixa or '—' }}</p>
             <div class="flex flex-wrap gap-2 mt-2">
                 <span class="badge badge-{{ 'info' if meta.foro_detectado == 'TNU' else ('warning' if meta.foro_detectado == 'STJ' else 'ghost') }}">
@@ -41,7 +46,7 @@
             <button class="btn btn-sm btn-primary"
                     x-show="status === 'idle' || status === 'error'"
                     @click="$dispatch('abrir-plano')">
-                Elaborar Peca
+                Atuar no PAJ
             </button>
 
             <button class="btn btn-sm btn-warning"
@@ -676,23 +681,26 @@
   <form method="dialog" class="modal-backdrop"><button>fechar</button></form>
 </dialog>
 
-<!-- Modal Plano de Elaboracao (R7) -->
-<div x-data="planoApp('{{ paj_norm }}', '{{ meta.paj }}')"
+<!-- Modal Plano de Atuação (R7 V2) -->
+<div x-data="planoApp('{{ paj_norm }}', '{{ meta.paj }}', '{{ meta.processo_judicial }}')"
      x-init="init()"
      @abrir-plano.window="abrir()"
      x-show="aberto"
      style="display:none"
      class="fixed inset-0 z-50 bg-black/60 flex items-start justify-center p-4 overflow-y-auto">
-    <div class="bg-base-100 rounded-lg max-w-3xl w-full p-6 my-8" @click.outside="aberto=false">
+    <div class="bg-base-100 rounded-lg max-w-4xl w-full p-6 my-8" @click.outside="aberto=false">
         <div class="flex justify-between items-center mb-4">
-            <h2 class="text-xl font-bold">Plano de Elaboracao — PAJ <span x-text="paj"></span></h2>
+            <div>
+                <h2 class="text-xl font-bold">Plano de Atuação — PAJ <span x-text="paj"></span></h2>
+                <p x-show="proc" class="text-xs text-base-content/60 font-mono" x-text="'proc. ' + proc"></p>
+            </div>
             <button class="btn btn-sm btn-ghost" @click="aberto=false">X</button>
         </div>
 
         <!-- Loading -->
         <div x-show="carregando" class="text-center py-8">
             <span class="loading loading-spinner loading-lg"></span>
-            <p class="mt-3 text-sm text-base-content/60">Claude analisando o caso (~30s)...</p>
+            <p class="mt-3 text-sm text-base-content/60">Claude analisando o caso (~60s)...</p>
         </div>
 
         <!-- Erro -->
@@ -703,98 +711,106 @@
 
         <!-- Plano -->
         <div x-show="!carregando && plano" style="display:none" class="space-y-4">
-            <div>
-                <label class="text-xs text-base-content/60">Tipo de atuacao</label>
-                <select class="select select-bordered select-sm w-full" x-model="plano.tipo_atuacao">
-                    <option value="RECURSO">RECURSO</option>
-                    <option value="DESPACHO_INTERNO">DESPACHO_INTERNO</option>
-                    <option value="ARQUIVAMENTO">ARQUIVAMENTO</option>
-                    <option value="NAO_ATUAR">NAO_ATUAR</option>
-                </select>
+            <!-- Tipo de atuação + peça (lado a lado) -->
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="text-xs text-base-content/60">Tipo de atuação</label>
+                    <select class="select select-bordered select-sm w-full" x-model="plano.tipo_atuacao">
+                        <option value="RECURSO">RECURSO judicial</option>
+                        <option value="DESPACHO_INTERNO">DESPACHO no SISDPU</option>
+                        <option value="ARQUIVAMENTO">ARQUIVAMENTO</option>
+                        <option value="NAO_ATUAR">NAO ATUAR (só ciência)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-xs text-base-content/60">Tipo de peça/despacho</label>
+                    <select class="select select-bordered select-sm w-full" x-model="plano.tipo_peca">
+                        <option value="nenhuma">nenhuma</option>
+                        <option value="embargos_declaracao_tnu">Embargos de declaração — TNU</option>
+                        <option value="embargos_declaracao_stj">Embargos de declaração — STJ</option>
+                        <option value="agravo_interno_tnu">Agravo interno — TNU</option>
+                        <option value="agravo_interno_stj">Agravo interno — STJ</option>
+                        <option value="resp">REsp</option>
+                        <option value="aresp">AREsp</option>
+                        <option value="re">RE</option>
+                        <option value="memoriais">Memoriais</option>
+                        <option value="embargos_divergencia_stj">Embargos de divergência — STJ</option>
+                        <option value="despacho_arquivamento">Despacho de arquivamento (SIS)</option>
+                        <option value="despacho_acompanhamento">Despacho de acompanhamento (SIS)</option>
+                    </select>
+                </div>
             </div>
 
-            <div>
-                <label class="text-xs text-base-content/60">Tipo de peca</label>
-                <select class="select select-bordered select-sm w-full" x-model="plano.tipo_peca">
-                    <option value="nenhuma">nenhuma</option>
-                    <option value="embargos_declaracao_tnu">embargos_declaracao_tnu</option>
-                    <option value="embargos_declaracao_stj">embargos_declaracao_stj</option>
-                    <option value="agravo_interno_tnu">agravo_interno_tnu</option>
-                    <option value="agravo_interno_stj">agravo_interno_stj</option>
-                    <option value="resp">resp</option>
-                    <option value="aresp">aresp</option>
-                    <option value="re">re</option>
-                    <option value="memoriais">memoriais</option>
-                    <option value="embargos_divergencia_stj">embargos_divergencia_stj</option>
-                    <option value="despacho_arquivamento">despacho_arquivamento</option>
-                    <option value="despacho_acompanhamento">despacho_acompanhamento</option>
-                </select>
+            <!-- Decisão recorrida/analisada — destaque + link -->
+            <div class="bg-base-200 rounded p-3 border-l-4 border-primary">
+                <label class="text-xs text-base-content/60 font-semibold">Decisão sob análise</label>
+                <textarea class="textarea textarea-bordered textarea-sm w-full mt-1" rows="2" x-model="plano.decisao_recorrida_descricao"></textarea>
+                <div class="flex items-center gap-2 mt-2" x-show="plano.decisao_recorrida_arquivo">
+                    <span class="text-xs text-base-content/60">Arquivo:</span>
+                    <code class="text-xs" x-text="plano.decisao_recorrida_arquivo"></code>
+                    <a class="btn btn-xs btn-outline" target="_blank" :href="urlArquivo(plano.decisao_recorrida_arquivo)">Ver texto</a>
+                </div>
+                <div class="flex items-center gap-2 mt-2" x-show="!plano.decisao_recorrida_arquivo">
+                    <span class="text-xs text-warning">Claude não apontou arquivo específico — confira manualmente nas peças</span>
+                </div>
             </div>
 
+            <!-- Análise narrativa (substitui fundamentos + razões) -->
+            <div>
+                <label class="text-xs text-base-content/60">Análise completa (narrativa)</label>
+                <textarea class="textarea textarea-bordered w-full mt-1 text-sm" rows="10" x-model="plano.analise_completa"></textarea>
+                <p class="text-xs text-base-content/40 mt-1">Edite à vontade. Esse é o texto que orienta Claude na elaboração final.</p>
+            </div>
+
+            <!-- Fontes auxiliares (separadas da decisão principal) -->
             <div>
                 <div class="flex justify-between items-center">
-                    <label class="text-xs text-base-content/60">Fundamentos principais</label>
-                    <button class="btn btn-xs btn-ghost" @click="plano.fundamentos_principais.push('')">+</button>
+                    <label class="text-xs text-base-content/60">Fontes auxiliares (jurisprudência, regimento, lei, paradigmas)</label>
+                    <button class="btn btn-xs btn-ghost" @click="plano.fontes_auxiliares.push({tipo:'juris',ref:'',arquivo:''})">+</button>
                 </div>
-                <template x-for="(_, i) in plano.fundamentos_principais" :key="i">
-                    <div class="flex gap-2 mt-1">
-                        <input class="input input-bordered input-sm flex-1" x-model="plano.fundamentos_principais[i]">
-                        <button class="btn btn-xs btn-ghost" @click="plano.fundamentos_principais.splice(i,1)">-</button>
-                    </div>
-                </template>
-            </div>
-
-            <div>
-                <div class="flex justify-between items-center">
-                    <label class="text-xs text-base-content/60">Fontes citadas</label>
-                    <button class="btn btn-xs btn-ghost" @click="plano.fontes_citadas.push({tipo:'juris',ref:''})">+</button>
-                </div>
-                <template x-for="(_, i) in plano.fontes_citadas" :key="i">
-                    <div class="flex gap-2 mt-1">
-                        <select class="select select-bordered select-sm" x-model="plano.fontes_citadas[i].tipo">
-                            <option value="decisao">decisao</option>
+                <template x-for="(_, i) in plano.fontes_auxiliares" :key="i">
+                    <div class="flex gap-2 mt-1 items-center">
+                        <select class="select select-bordered select-xs w-32" x-model="plano.fontes_auxiliares[i].tipo">
                             <option value="juris">juris</option>
                             <option value="regimento">regimento</option>
                             <option value="lei">lei</option>
+                            <option value="decisao_paradigma">paradigma</option>
                         </select>
-                        <input class="input input-bordered input-sm flex-1" x-model="plano.fontes_citadas[i].ref">
-                        <button class="btn btn-xs btn-ghost" @click="plano.fontes_citadas.splice(i,1)">-</button>
+                        <input class="input input-bordered input-xs flex-1" x-model="plano.fontes_auxiliares[i].ref" placeholder="ex: RITNU art. 15">
+                        <a x-show="plano.fontes_auxiliares[i].arquivo" class="btn btn-xs btn-outline" target="_blank" :href="urlArquivo(plano.fontes_auxiliares[i].arquivo)">abrir</a>
+                        <button class="btn btn-xs btn-ghost" @click="plano.fontes_auxiliares.splice(i,1)">-</button>
                     </div>
                 </template>
             </div>
 
-            <div>
-                <label class="text-xs text-base-content/60">Razoes (resumo)</label>
-                <textarea class="textarea textarea-bordered textarea-sm w-full" rows="2" x-model="plano.razoes_resumo"></textarea>
-            </div>
-
-            <details>
-                <summary class="cursor-pointer text-xs text-base-content/60">Raciocinio completo do Claude</summary>
-                <textarea class="textarea textarea-bordered textarea-sm w-full mt-2" rows="6" x-model="plano.raciocinio_completo"></textarea>
-            </details>
-
+            <!-- Confiança + alertas -->
             <div class="flex gap-3 items-center text-xs">
-                <span>Confianca:</span>
+                <span>Confiança Claude:</span>
                 <span class="badge" :class="plano.confianca === 'alta' ? 'badge-success' : (plano.confianca === 'baixa' ? 'badge-error' : 'badge-warning')" x-text="plano.confianca"></span>
-                <span x-show="plano.alertas && plano.alertas.length" class="text-warning">
-                    Alertas: <span x-text="(plano.alertas||[]).join('; ')"></span>
-                </span>
+            </div>
+            <div x-show="plano.alertas && plano.alertas.length" class="alert alert-warning text-xs">
+                <div>
+                    <b>Alertas:</b>
+                    <ul class="list-disc ml-5 mt-1">
+                        <template x-for="a in plano.alertas"><li x-text="a"></li></template>
+                    </ul>
+                </div>
             </div>
 
-            <!-- Chat feedback -->
+            <!-- Chat feedback (V2 já viável: replanejar com instrução adicional) -->
             <details class="bg-base-200 rounded p-3">
-                <summary class="cursor-pointer text-sm">Discordar / pedir correcao ao Claude</summary>
+                <summary class="cursor-pointer text-sm">Discordar / pedir refazer ao Claude com observação</summary>
                 <div class="mt-3 space-y-2">
-                    <textarea class="textarea textarea-bordered textarea-sm w-full" rows="3" x-model="feedbackMsg" placeholder="Ex: nao cabe agravo interno aqui, decisao e do Presidente TNU. Refaca pensando em ED."></textarea>
-                    <button class="btn btn-sm btn-warning" @click="reGerar()" :disabled="!feedbackMsg || carregando">Refazer com feedback</button>
+                    <textarea class="textarea textarea-bordered textarea-sm w-full" rows="3" x-model="feedbackMsg" placeholder="Ex: Decisão é só admissão de PUIL, não vitória. Refaça."></textarea>
+                    <button class="btn btn-sm btn-warning" @click="reGerar()" :disabled="!feedbackMsg || carregando">Refazer com observação (~60s)</button>
                 </div>
             </details>
 
             <div class="flex gap-3 justify-end pt-4 border-t border-base-300">
                 <button class="btn btn-sm btn-ghost" @click="aberto=false">Cancelar</button>
-                <button class="btn btn-sm btn-primary" @click="aprovarEElaborar()">Aprovar plano e elaborar peca</button>
+                <button class="btn btn-sm btn-primary" @click="aprovarEElaborar()">Aprovar plano e atuar</button>
             </div>
-            <p class="text-xs text-base-content/50 text-right">Ao aprovar, Claude vai executar o plano e gerar a peca (texto seco + DOCX/PDF se judicial).</p>
+            <p class="text-xs text-base-content/50 text-right">Ao aprovar, Claude executa o plano. Peça judicial vira texto seco + DOCX/PDF. Despacho SIS é só texto.</p>
         </div>
     </div>
 </div>
@@ -803,42 +819,64 @@
 
 {% block scripts %}
 <script>
-function planoApp(pajNorm, paj) {
+function planoApp(pajNorm, paj, proc) {
     return {
         pajNorm: pajNorm,
         paj: paj,
+        proc: proc || '',
         aberto: false,
         carregando: false,
         plano: null,
         erro: '',
         feedbackMsg: '',
+
         async init() {
-            // Tenta carregar plano salvo (se ja existir)
             try {
                 const r = await fetch('/api/elaborar/plano/' + this.pajNorm);
                 const d = await r.json();
-                if (d.ok && d.plano) {
+                if (d.ok && d.plano && d.plano.analise_completa !== undefined) {
+                    // Só carrega se já está no schema novo
                     this.plano = d.plano;
                 }
             } catch (e) { /* ignore */ }
         },
+
+        urlArquivo(nomeArquivo) {
+            if (!nomeArquivo) return '#';
+            // Heurística: arquivo está em peças/ ou decisoes_superiores/
+            // Tenta peças/ primeiro (subpasta mais comum)
+            if (nomeArquivo.includes('/')) {
+                return '/files/' + this.pajNorm + '/' + encodeURI(nomeArquivo);
+            }
+            return '/files/' + this.pajNorm + '/peças/' + encodeURI(nomeArquivo);
+        },
+
         async abrir() {
             this.aberto = true;
             this.erro = '';
             if (!this.plano) await this.gerar();
         },
-        async gerar() {
+
+        async gerar(feedbackInstrucao) {
             this.carregando = true;
             this.erro = '';
             try {
-                const r = await fetch('/api/elaborar/planejar/' + this.pajNorm, {method: 'POST'});
+                const body = {};
+                if (feedbackInstrucao) body.feedback = feedbackInstrucao;
+                const r = await fetch('/api/elaborar/planejar/' + this.pajNorm, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
                 const d = await r.json();
                 if (d.ok) {
                     this.plano = d.plano;
-                    // Garantir campos array
-                    this.plano.fundamentos_principais = this.plano.fundamentos_principais || [];
-                    this.plano.fontes_citadas = this.plano.fontes_citadas || [];
+                    // Garantir campos
+                    this.plano.fontes_auxiliares = this.plano.fontes_auxiliares || [];
                     this.plano.alertas = this.plano.alertas || [];
+                    if (!this.plano.decisao_recorrida_descricao) this.plano.decisao_recorrida_descricao = '';
+                    if (!this.plano.decisao_recorrida_arquivo) this.plano.decisao_recorrida_arquivo = '';
+                    if (!this.plano.analise_completa) this.plano.analise_completa = '';
                 } else {
                     this.erro = d.erro || 'erro desconhecido';
                 }
@@ -848,15 +886,15 @@ function planoApp(pajNorm, paj) {
                 this.carregando = false;
             }
         },
+
         async reGerar() {
-            // V1: pra simplificar, re-chamamos planejar com feedback como hint no PROMPT_MAX
-            // (futuro: endpoint dedicado planejar-com-feedback)
-            // Por ora, abre alerta dizendo pra editar manualmente
-            if (typeof showToast === 'function') showToast('V1: edite os campos manualmente acima. Refazer-com-feedback chega na proxima versao.', 'info');
+            if (!this.feedbackMsg.trim()) return;
+            const msg = this.feedbackMsg;
             this.feedbackMsg = '';
+            await this.gerar(msg);
         },
+
         async aprovarEElaborar() {
-            // Salva plano aprovado
             try {
                 const r = await fetch('/api/elaborar/aprovar-plano/' + this.pajNorm, {
                     method: 'POST',
@@ -867,10 +905,9 @@ function planoApp(pajNorm, paj) {
                     this.erro = 'erro salvando plano';
                     return;
                 }
-                // Dispara elaboracao
                 await fetch('/api/elaborar/start/' + this.pajNorm, {method: 'POST'});
                 this.aberto = false;
-                if (typeof showToast === 'function') showToast('Claude iniciou elaboracao com o plano aprovado', 'success');
+                if (typeof showToast === 'function') showToast('Claude iniciou atuação com o plano aprovado', 'success');
             } catch (e) {
                 this.erro = 'falha: ' + e.message;
             }

@@ -68,59 +68,86 @@ def _ler_decisao_recente(pasta: Path, limite: int = 4000) -> str:
     return ""
 
 
-def _montar_prompt(paj: str, meta: dict, resumo: str, decisao: str) -> str:
+def _listar_arquivos_pecas(pasta: Path) -> str:
+    """Lista nomes de arquivos .txt em peças/ e decisoes_superiores/ para o Claude poder
+    referenciar no campo decisao_recorrida_arquivo / fontes_auxiliares.arquivo."""
+    linhas = []
+    for sub in ("peças", "pecas", "decisoes_superiores"):
+        d = pasta / sub
+        if not d.exists():
+            continue
+        arqs = sorted([f.name for f in d.iterdir() if f.suffix == ".txt"])
+        if arqs:
+            linhas.append(f"  {sub}/:")
+            for a in arqs:
+                linhas.append(f"    - {a}")
+    return "\n".join(linhas) if linhas else "  (nenhum arquivo de peça/decisão local)"
+
+
+def _montar_prompt(paj: str, meta: dict, resumo: str, decisao: str, arquivos_locais: str = "") -> str:
     det = meta.get("detalhes_sisdpu", {}) or {}
-    return f"""Você é assistente jurídico DPU (TNU+STJ). JP é Defensor Categoria Especial.
+    return f"""Você é assistente jurídico da DPU (TNU+STJ). JP é Defensor Cat. Especial.
 
-TAREFA: produza um PLANO ESTRUTURADO em JSON para o PAJ abaixo. NÃO escreva a peça ainda. Só analise e proponha estrutura. JP vai revisar antes de você executar.
+TAREFA: analisar o PAJ e propor um PLANO DE ATUAÇÃO. JP vai revisar antes de executar.
 
-PAJ: {paj}
-Assistido: {det.get('assistido', '?')}
-Classificação automática: {meta.get('classificacao', '?')}
-Foro: {meta.get('foro_detectado', '?')}
-Processo judicial: {meta.get('processo_judicial', '?')}
+CONTEXTO DO PAJ:
+- PAJ: {paj}
+- Assistido: {det.get('assistido', '?')}
+- Classificação automática (heurística pode estar errada): {meta.get('classificacao', '?')}
+- Foro: {meta.get('foro_detectado', '?')}
+- Processo judicial: {meta.get('processo_judicial', '?')}
 
-RESUMO:
+RESUMO DA SITUAÇÃO:
 {resumo[:2000]}
 
-TRECHO DA DECISÃO MAIS RECENTE:
-{decisao[:3000]}
+TRECHO DA DECISÃO MAIS RECENTE BAIXADA:
+{decisao[:3500]}
+
+ARQUIVOS LOCAIS DA PASTA DO PAJ (use estes nomes em decisao_recorrida_arquivo e fontes_auxiliares.arquivo):
+{arquivos_locais}
 
 REGRAS:
-- JP atua em TNU + STJ previdenciário, Cat. Especial
-- TNU/STJ/JEF: sem dobra DPU, dias úteis, +10d ciência ficta e-Proc
-- Decisão monocrática Relator → cabe agravo interno
-- Decisão monocrática Presidente TNU → IRRECORRÍVEL na maioria
-- Decisão colegiada TNU → ED só se omissão/contradição/obscuridade; analisar REsp/RE
-- Não generalizar — estudar o caso
+- JP atua TNU + STJ previdenciário, Cat. Especial.
+- TNU/STJ/JEF: SEM dobra DPU. Dias úteis. +10d ciência ficta e-Proc.
+- Decisão monocrática do RELATOR → pode caber agravo interno.
+- Decisão monocrática do PRESIDENTE TNU → geralmente IRRECORRÍVEL.
+- Decisão COLEGIADA TNU → ED só se omissão/contradição/obscuridade; pode caber REsp/RE.
+- Decisão de mera ADMISSÃO de PUIL = neutra (processo continua, não é vitória nem derrota).
+- Decisão de PROVIMENTO com restituição = VITÓRIA.
+- Decisão de DESPROVIMENTO/NÃO-CONHECIMENTO = DERROTA.
+- NUNCA chame de "favorável" se for só admissão/conhecimento/distribuição/conversão em diligência. Use "neutra".
 
-CLASSES VÁLIDAS:
-- tipo_atuacao: RECURSO | DESPACHO_INTERNO | ARQUIVAMENTO | NAO_ATUAR
-- tipo_peca: embargos_declaracao_tnu | embargos_declaracao_stj | agravo_interno_tnu | agravo_interno_stj | resp | aresp | re | memoriais | embargos_divergencia_stj | despacho_arquivamento | despacho_acompanhamento | nenhuma
+ATUAÇÃO POSSÍVEL:
+- RECURSO + peça específica (ED, agravo interno, REsp, AREsp, RE, memoriais, embargos divergência)
+- DESPACHO_INTERNO + tipo (despacho_acompanhamento, despacho_arquivamento) — só registro no SISDPU, sem peça judicial
+- ARQUIVAMENTO + despacho_arquivamento (vitória final ou irrecorribilidade definitiva)
+- NAO_ATUAR + nenhuma — só ciência
 
-Responda APENAS com JSON puro (sem markdown, sem texto antes/depois):
-{{
-  "tipo_atuacao": "...",
-  "tipo_peca": "...",
-  "fundamentos_principais": ["fundamento 1 curto", "fundamento 2", "..."],
-  "fontes_citadas": [
-    {{"tipo": "decisao", "ref": "Decisão monocrática do Rel. X em DD/MM/YYYY"}},
-    {{"tipo": "juris", "ref": "Tema 359/TNU - Neian Milhomem Cruz - 25/06/2025"}},
-    {{"tipo": "regimento", "ref": "RITNU art. 16"}},
-    {{"tipo": "lei", "ref": "Lei 10.259/2001 art. 14"}}
-  ],
-  "razoes_resumo": "explicação curta da escolha (100-300 chars)",
-  "raciocinio_completo": "texto livre até 1000 chars",
-  "confianca": "alta|media|baixa",
-  "alertas": ["alerta opcional", "ex: Prazo apertado", "ex: Tese ainda não pacificada"]
-}}"""
+IMPORTANTE — análise narrativa:
+- Em vez de fundamentos em bullets, escreva UMA ANÁLISE NARRATIVA CORRIDA em "analise_completa"
+- Explique o que aconteceu, por que escolheu essa atuação, qual é o caminho recomendado
+- Português jurídico claro, mas sem floreio
+- 500-2000 caracteres
+- Se for só admissão de PUIL, diga isso explicitamente — não confunda com vitória
+
+DECISÃO RECORRIDA (campo separado):
+- decisao_recorrida_descricao: 1-2 frases identificando a decisão sendo analisada
+  (ex: "Despacho do Presidente TNU em DD/MM/AAAA admitindo o PUIL e determinando distribuição.")
+- decisao_recorrida_arquivo: nome do arquivo .txt na pasta peças/ ou decisoes_superiores/
+  que CONTÉM essa decisão (apenas o nome, ex: "2026-05-04_ev8_DESPADEC1.txt"). Vazio se não achar arquivo claro.
+
+OUTRAS FONTES (auxiliares):
+- Lista de outras fontes citadas (jurisprudência, regimento, lei)
+- Cada uma com `tipo`, `ref`, e `arquivo` (se puder apontar arquivo local)"""
 
 
 PLANO_JSON_SCHEMA = {
     "type": "object",
     "required": [
-        "tipo_atuacao", "tipo_peca", "fundamentos_principais",
-        "fontes_citadas", "razoes_resumo", "raciocinio_completo", "confianca",
+        "tipo_atuacao", "tipo_peca",
+        "decisao_recorrida_descricao", "decisao_recorrida_arquivo",
+        "analise_completa", "fontes_auxiliares",
+        "confianca",
     ],
     "properties": {
         "tipo_atuacao": {
@@ -136,28 +163,55 @@ PLANO_JSON_SCHEMA = {
                 "despacho_arquivamento", "despacho_acompanhamento", "nenhuma",
             ],
         },
-        "fundamentos_principais": {"type": "array", "items": {"type": "string"}},
-        "fontes_citadas": {
+        # Decisão sob análise (destacada, com arquivo clicável)
+        "decisao_recorrida_descricao": {
+            "type": "string",
+            "description": "1-2 frases identificando a decisão sendo analisada",
+        },
+        "decisao_recorrida_arquivo": {
+            "type": "string",
+            "description": "Nome do .txt na pasta peças/ ou decisoes_superiores/ contendo a decisão. Vazio se não achar.",
+        },
+        # Análise narrativa única (substitui bullets de fundamentos + razões)
+        "analise_completa": {
+            "type": "string",
+            "description": "Texto narrativo corrido (500-2000 chars) explicando o caso e a atuação proposta",
+        },
+        # Fontes auxiliares (não a decisão principal)
+        "fontes_auxiliares": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "tipo": {"type": "string", "enum": ["decisao", "juris", "regimento", "lei"]},
+                    "tipo": {"type": "string", "enum": ["juris", "regimento", "lei", "decisao_paradigma"]},
                     "ref": {"type": "string"},
+                    "arquivo": {
+                        "type": "string",
+                        "description": "Nome do arquivo local que contém a fonte (se houver). Vazio se externa.",
+                    },
                 },
                 "required": ["tipo", "ref"],
             },
         },
-        "razoes_resumo": {"type": "string"},
-        "raciocinio_completo": {"type": "string"},
         "confianca": {"type": "string", "enum": ["alta", "media", "baixa"]},
         "alertas": {"type": "array", "items": {"type": "string"}},
     },
 }
 
 
-async def planejar_elaboracao(paj_norm: str, timeout: int = 180) -> dict:
-    """Chama Claude CLI com prompt de planejamento. Retorna JSON parseado."""
+async def planejar_elaboracao(
+    paj_norm: str,
+    timeout: int = 180,
+    feedback_jp: str = "",
+) -> dict:
+    """Chama Claude CLI com prompt de planejamento. Retorna JSON parseado.
+
+    Args:
+        paj_norm: PAJ no formato YYYY-UUU-NNNNN
+        timeout: máximo de segundos
+        feedback_jp: instrução adicional do JP pra refazer com observação
+                     (ex: "Decisão é só admissão, não vitória. Refaça.")
+    """
     pasta = ENTRADA_DIR / paj_norm
     meta_f = pasta / "metadata.json"
     if not meta_f.exists():
@@ -171,7 +225,13 @@ async def planejar_elaboracao(paj_norm: str, timeout: int = 180) -> dict:
     paj_original = meta.get("paj", paj_norm)
     resumo = _ler_resumo_curto(pasta)
     decisao = _ler_decisao_recente(pasta)
-    prompt = _montar_prompt(paj_original, meta, resumo, decisao)
+    arquivos_locais = _listar_arquivos_pecas(pasta)
+    prompt = _montar_prompt(paj_original, meta, resumo, decisao, arquivos_locais)
+    if feedback_jp.strip():
+        prompt += (
+            "\n\nOBSERVAÇÃO IMPORTANTE DO DEFENSOR (refaça considerando isto):\n"
+            f"\"\"\"{feedback_jp.strip()[:500]}\"\"\""
+        )
 
     # --print: modo não-interativo
     # --output-format json: retorna wrapper {"result": ..., "is_error": ...}
