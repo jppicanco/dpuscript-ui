@@ -253,6 +253,8 @@ async def planejar_elaboracao(
     # --json-schema: força resposta seguir esquema
     # --setting-sources user: ignora CLAUDE.md project (que confunde com tom conversacional)
     # --append-system-prompt: reforça que é tarefa de extração
+    # Prompt vai via stdin (limite Windows = 32k chars no command line).
+    # Sem argumento posicional de prompt — Claude lê stdin com --print.
     cmd = [
         CLAUDE_CMD,
         "--print",
@@ -263,13 +265,13 @@ async def planejar_elaboracao(
         "Você é executor de tarefa estruturada. NÃO inicie conversa nem se "
         "apresente. Apenas analise o caso e responda com JSON puro seguindo o "
         "schema. Sem markdown, sem texto antes/depois.",
-        prompt,
     ]
 
     try:
         proc = await asyncio.to_thread(
             subprocess.run,
             cmd,
+            input=prompt,
             capture_output=True,
             text=True,
             encoding="utf-8",
