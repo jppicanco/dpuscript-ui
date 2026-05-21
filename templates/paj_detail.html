@@ -22,7 +22,9 @@
                 <span class="badge badge-{{ 'info' if meta.foro_detectado == 'TNU' else ('warning' if meta.foro_detectado == 'STJ' else 'ghost') }}">
                     {{ meta.foro_detectado }}
                 </span>
-                <span class="badge badge-outline">{{ meta.classificacao }}</span>
+                <span class="badge badge-outline tooltip"
+                      data-tip="Sistema sugere — clique 'Corrigir' abaixo se errado"
+                      >{{ meta.classificacao }}</span>
                 {% if meta.processo_judicial %}
                 <span class="badge badge-ghost font-mono text-xs">{{ meta.processo_judicial }}</span>
                 {% endif %}
@@ -186,7 +188,52 @@
                     <tr><td class="text-base-content/50 w-48">PAJ</td><td class="font-mono">{{ meta.paj }}</td></tr>
                     <tr><td class="text-base-content/50">Processo judicial</td><td class="font-mono">{{ meta.processo_judicial or '—' }}</td></tr>
                     <tr><td class="text-base-content/50">Foro</td><td>{{ meta.foro_detectado }}</td></tr>
-                    <tr><td class="text-base-content/50">Classificacao</td><td><span class="badge badge-outline">{{ meta.classificacao }}</span></td></tr>
+                    <tr><td class="text-base-content/50">Classificacao</td><td>
+                        <div x-data="corrigirClassif('{{ paj_norm }}', '{{ meta.classificacao }}', '{{ meta.paj }}')" x-init="init()">
+                            <span class="badge badge-outline" x-text="atual"></span>
+                            <button class="btn btn-xs btn-ghost ml-2" @click="abrir = !abrir" x-text="abrir ? 'Cancelar' : 'Corrigir'"></button>
+                            <div x-show="abrir" class="mt-3 p-3 bg-base-200 rounded space-y-2" style="display:none">
+                                <label class="text-xs text-base-content/60">Classificação correta:</label>
+                                <select class="select select-bordered select-sm w-full" x-model="nova">
+                                    <option value="">— escolher —</option>
+                                    <option value="DECISAO_MONOCRATICA_RELATOR_TNU">DECISAO_MONOCRATICA_RELATOR_TNU</option>
+                                    <option value="DECISAO_MONOCRATICA_RELATOR_STJ">DECISAO_MONOCRATICA_RELATOR_STJ</option>
+                                    <option value="DECISAO_MONOCRATICA_PRESIDENTE_TNU">DECISAO_MONOCRATICA_PRESIDENTE_TNU</option>
+                                    <option value="DECISAO_MONOCRATICA_PRESIDENTE_STJ">DECISAO_MONOCRATICA_PRESIDENTE_STJ</option>
+                                    <option value="DECISAO_COLEGIADA_TNU">DECISAO_COLEGIADA_TNU</option>
+                                    <option value="DECISAO_COLEGIADA_STJ">DECISAO_COLEGIADA_STJ</option>
+                                    <option value="DECISAO_COLEGIADA_TNU_PROVIMENTO">DECISAO_COLEGIADA_TNU_PROVIMENTO</option>
+                                    <option value="DECISAO_COLEGIADA_STJ_PROVIMENTO">DECISAO_COLEGIADA_STJ_PROVIMENTO</option>
+                                    <option value="DECISAO_MERITO_TNU_PENDENTE">DECISAO_MERITO_TNU_PENDENTE</option>
+                                    <option value="DECISAO_MERITO_STJ_PENDENTE">DECISAO_MERITO_STJ_PENDENTE</option>
+                                    <option value="AGUARDA_JULGAMENTO_TNU">AGUARDA_JULGAMENTO_TNU</option>
+                                    <option value="AGUARDA_JULGAMENTO_STJ">AGUARDA_JULGAMENTO_STJ</option>
+                                    <option value="INCLUSAO_EM_PAUTA">INCLUSAO_EM_PAUTA</option>
+                                    <option value="ARQUIVADO_VITORIA_PROVIMENTO">ARQUIVADO_VITORIA_PROVIMENTO</option>
+                                    <option value="ARQUIVADO_TRAMITE_INTERNO">ARQUIVADO_TRAMITE_INTERNO</option>
+                                    <option value="RETORNO_AUTOMATICO_1ANO">RETORNO_AUTOMATICO_1ANO</option>
+                                    <option value="VISTA_MP">VISTA_MP</option>
+                                    <option value="RETORNO_ASSISTIDO">RETORNO_ASSISTIDO</option>
+                                    <option value="INTIMACAO_SIMPLES_CIENCIA">INTIMACAO_SIMPLES_CIENCIA</option>
+                                    <option value="OUTRO">OUTRO</option>
+                                </select>
+                                <label class="text-xs text-base-content/60">Por quê? (curto)</label>
+                                <textarea class="textarea textarea-bordered textarea-sm w-full" rows="2" x-model="razao" placeholder="Ex: É decisão monocrática do Presidente da TNU, não cabe agravo interno"></textarea>
+                                <div class="flex items-center gap-2">
+                                    <input type="checkbox" class="checkbox checkbox-sm" x-model="ensinar" id="ensinar-chk">
+                                    <label for="ensinar-chk" class="text-xs">Ensinar para casos futuros similares</label>
+                                </div>
+                                <div x-show="ensinar" style="display:none">
+                                    <label class="text-xs text-base-content/60">Regex que identifica esse padrão (no texto da decisão):</label>
+                                    <input class="input input-bordered input-sm w-full font-mono text-xs" x-model="regex" placeholder="Ex: PRESIDENTE\s+DA\s+TNU">
+                                </div>
+                                <div class="flex gap-2">
+                                    <button class="btn btn-sm btn-primary" @click="salvar()" :disabled="!nova || !razao">Salvar correção</button>
+                                    <span x-text="msg" class="text-xs self-center" :class="erro ? 'text-error' : 'text-success'"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </td></tr>
                     <tr><td class="text-base-content/50">Assistido</td><td>{{ meta.assistido_caixa or '—' }}</td></tr>
                     <tr><td class="text-base-content/50">Oficio</td><td>{{ meta.oficio_caixa or '—' }}</td></tr>
                     <tr><td class="text-base-content/50">Status</td><td>{{ det.status_paj or '—' }}</td></tr>
@@ -379,6 +426,12 @@
                                 {% elif p.tipo in ('txt', 'md') %}
                                 <button class="btn btn-ghost btn-xs"
                                         @click="verTxt('{{ paj_norm }}', '{{ p.caminho }}', '{{ p.nome|e }}')">Ler</button>
+                                {% if p.tipo == 'txt' %}
+                                <button class="btn btn-warning btn-xs"
+                                        @click="abrirSIS('{{ paj_norm }}', '{{ p.caminho }}', '{{ dados.metadata.classificacao }}')">
+                                    ⚡ SIS
+                                </button>
+                                {% endif %}
                                 {% else %}
                                 <a href="/files/{{ paj_norm }}/{{ p.caminho }}" target="_blank"
                                    class="btn btn-ghost btn-xs">Baixar</a>
@@ -492,10 +545,147 @@
     <form method="dialog" class="modal-backdrop"><button>fechar</button></form>
 </dialog>
 
+<!-- Modal SISDPU: preview de confirmação + log ao vivo -->
+<dialog id="sis-modal" class="modal">
+  <div class="modal-box w-11/12 max-w-2xl" x-data="sisModal()">
+
+    <!-- Estado: preview (confirmação) -->
+    <div x-show="estado === 'preview'">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="font-bold text-lg">⚡ Movimentar no SISDPU</h3>
+        <form method="dialog"><button class="btn btn-sm btn-ghost">✕</button></form>
+      </div>
+
+      <!-- Loader enquanto carrega preview -->
+      <div x-show="carregando" class="flex justify-center py-8">
+        <span class="loading loading-spinner loading-lg"></span>
+      </div>
+
+      <!-- Erro grave (arquivo não encontrado etc.) — bloqueia o modal -->
+      <div x-show="!carregando && erro" class="alert alert-error mb-4">
+        <span x-text="erro"></span>
+      </div>
+
+      <!-- Preview carregado (funciona mesmo sem fase pré-mapeada) -->
+      <div x-show="!carregando && !erro">
+
+        <!-- Aviso: fase inferida do texto (tom amarelo suave — confirmar antes) -->
+        <div x-show="preview.aviso && preview.fase_inferida" class="alert alert-info mb-3 text-xs py-2 gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+          <span x-text="preview.aviso"></span>
+        </div>
+        <!-- Aviso: fase não identificada — usuário deve escolher manualmente -->
+        <div x-show="preview.aviso && !preview.fase_inferida" class="alert alert-warning mb-3 text-xs py-2 gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+          <span x-text="preview.aviso"></span>
+        </div>
+        <div class="space-y-3 mb-4">
+          <div class="flex gap-2"><span class="text-base-content/50 w-32">PAJ</span><span x-text="preview.paj" class="font-mono"></span></div>
+          <div class="flex gap-2"><span class="text-base-content/50 w-32">Classificação</span><span x-text="preview.classificacao" class="badge badge-ghost badge-sm font-mono"></span></div>
+          <div class="flex gap-2 items-start">
+            <span class="text-base-content/50 w-32 shrink-0">Fase SISDPU</span>
+            <select class="select select-bordered select-sm flex-1" x-model="faseEscolhida">
+              <option value="Arquivado. Com vitória total na via judicial">Arquivado. Com vitória total na via judicial</option>
+              <option value="Arquivado. Inviabilidade recursal">Arquivado. Inviabilidade recursal</option>
+              <option value="Aguardando tramitação judicial/Administrativa">Aguardando tramitação judicial/Administrativa</option>
+              <option value="Decurso de prazo">Decurso de prazo</option>
+              <option value="Petição. Recurso">Petição. Recurso</option>
+              <option value="Arquivado. Outros.">Arquivado. Outros.</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="mb-4">
+          <p class="text-xs text-base-content/50 mb-1">Prévia do despacho</p>
+          <pre class="bg-base-300 rounded p-3 text-xs whitespace-pre-wrap max-h-40 overflow-y-auto" x-text="preview.despacho_texto + (preview.despacho_texto && preview.despacho_texto.length >= 500 ? '\n...' : '')"></pre>
+        </div>
+
+        <div class="alert alert-warning mb-4">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+          <span class="text-xs">Esta ação irá movimentar o PAJ no SISDPU. O Edge abrirá visível para acompanhamento. Verifique o despacho e a fase antes de confirmar.</span>
+        </div>
+
+        <div class="flex gap-2 justify-end">
+          <form method="dialog"><button class="btn btn-ghost btn-sm">Cancelar</button></form>
+          <button class="btn btn-warning btn-sm" @click="confirmar()" :disabled="!faseEscolhida">
+            ⚡ Confirmar e Executar
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Estado: executando / concluido (log ao vivo) -->
+    <div x-show="estado === 'executando' || estado === 'concluido'">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="font-bold text-lg">
+          <span x-show="estado === 'executando'" class="flex items-center gap-2">
+            <span class="loading loading-spinner loading-sm"></span> Executando no SISDPU...
+          </span>
+          <span x-show="estado === 'concluido'" x-text="sucesso ? '✅ Concluído com sucesso' : '❌ Erro na execução'"></span>
+        </h3>
+        <!-- ✕ sempre visível — usuário pode fechar a qualquer momento -->
+        <form method="dialog"><button class="btn btn-sm btn-ghost">✕</button></form>
+      </div>
+
+      <div class="bg-base-300 rounded-lg p-3 font-mono text-xs max-h-80 overflow-y-auto" id="sis-log-terminal" x-ref="logTerminal">
+        <template x-for="(linha, i) in logLinhas" :key="i">
+          <div :class="linha.includes('❌') ? 'text-error' : (linha.includes('✅') || linha.includes('✓') ? 'text-success' : 'text-base-content/70')" x-text="linha"></div>
+        </template>
+      </div>
+
+      <div class="mt-4 flex justify-end" x-show="estado === 'concluido'">
+        <form method="dialog"><button class="btn btn-sm btn-primary">Fechar</button></form>
+      </div>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>fechar</button></form>
+</dialog>
+
 {% endblock %}
 
 {% block scripts %}
 <script>
+function corrigirClassif(pajNorm, atual, pajOriginal) {
+    return {
+        pajNorm: pajNorm,
+        pajOriginal: pajOriginal,
+        atual: atual,
+        abrir: false,
+        nova: '',
+        razao: '',
+        regex: '',
+        ensinar: false,
+        msg: '',
+        erro: false,
+        init() {},
+        async salvar() {
+            if (!this.nova || !this.razao) return;
+            this.msg = 'salvando...';
+            this.erro = false;
+            const fd = new FormData();
+            fd.append('classif_correta', this.nova);
+            fd.append('razao', this.razao);
+            if (this.ensinar && this.regex) fd.append('padrao_regex', this.regex);
+            try {
+                const r = await fetch('/api/correcao/' + this.pajNorm, { method: 'POST', body: fd });
+                const d = await r.json();
+                if (r.ok) {
+                    this.atual = this.nova;
+                    this.abrir = false;
+                    this.msg = d.regra_criada ? 'corrigido + regra geral aprendida' : 'corrigido';
+                    if (typeof showToast === 'function') showToast(this.msg, 'success');
+                } else {
+                    this.erro = true;
+                    this.msg = 'erro: ' + (d.detail || 'desconhecido');
+                }
+            } catch (e) {
+                this.erro = true;
+                this.msg = 'erro: ' + e.message;
+            }
+        }
+    };
+}
+
 function copiarPrompt() {
     var el = document.getElementById('prompt-content');
     if (!el) return;
@@ -540,6 +730,92 @@ function copiarTxt() {
     navigator.clipboard.writeText(el.textContent).then(() => {
         showToast('Copiado', 'success');
     });
+}
+
+// ---------------------------------------------------------------------------
+// SIS Modal — integração SISDPU
+// ---------------------------------------------------------------------------
+
+function abrirSIS(pajNorm, despachoNome, classificacao) {
+    const dialog = document.getElementById('sis-modal');
+    dialog.showModal();
+    // Alpine 3: acessa o store de dados via _x_dataStack
+    const alpineData = dialog.querySelector('[x-data]')._x_dataStack[0];
+    if (alpineData && typeof alpineData.abrir === 'function') {
+        alpineData.abrir(pajNorm, despachoNome);
+    }
+}
+
+function sisModal() {
+    return {
+        estado: 'preview',  // 'preview' | 'executando' | 'concluido'
+        carregando: false,
+        erro: null,
+        preview: {},
+        faseEscolhida: '',
+        logLinhas: [],
+        sucesso: false,
+        pajNorm: null,
+        despachoNome: null,
+
+        abrir(pajNorm, despachoNome) {
+            this.pajNorm = pajNorm;
+            this.despachoNome = despachoNome;
+            this.estado = 'preview';
+            this.carregando = true;
+            this.erro = null;
+            this.logLinhas = [];
+            this.sucesso = false;
+            this.faseEscolhida = '';
+            this.preview = {};
+
+            fetch(`/api/paj/${pajNorm}/sisdpu/preview?despacho=${encodeURIComponent(despachoNome)}`)
+                .then(r => r.json())
+                .then(data => {
+                    this.carregando = false;
+                    if (data.erro) {
+                        this.erro = data.erro;
+                    } else {
+                        this.preview = data;
+                        this.faseEscolhida = data.fase || '';
+                    }
+                })
+                .catch(e => {
+                    this.carregando = false;
+                    this.erro = 'Erro ao carregar preview: ' + e.message;
+                });
+        },
+
+        confirmar() {
+            this.estado = 'executando';
+            this.logLinhas = ['[SISDPU] Iniciando automação...'];
+
+            const url = `/api/paj/${this.pajNorm}/sisdpu/executar?despacho=${encodeURIComponent(this.despachoNome)}&fase=${encodeURIComponent(this.faseEscolhida)}`;
+            const es = new EventSource(url);
+
+            es.addEventListener('log', (e) => {
+                this.logLinhas.push(e.data);
+                this.$nextTick(() => {
+                    const el = this.$refs.logTerminal;
+                    if (el) el.scrollTop = el.scrollHeight;
+                });
+            });
+
+            es.addEventListener('done', (e) => {
+                es.close();
+                this.estado = 'concluido';
+                this.sucesso = !this.logLinhas.some(l => l.includes('❌'));
+                this.logLinhas.push(e.data);
+            });
+
+            es.onerror = () => {
+                es.close();
+                this.estado = 'concluido';
+                this.sucesso = false;
+                this.logLinhas.push('[SISDPU] ❌ Conexão SSE encerrada inesperadamente');
+            };
+        }
+    };
 }
 </script>
 {% endblock %}
