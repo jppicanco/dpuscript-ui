@@ -26,6 +26,7 @@ from routes.sync import router as sync_router
 from routes.correcao import router as correcao_router
 from routes.feedback import router as feedback_router
 from routes.busca import router as busca_router
+from routes.planejar import router as planejar_router
 
 BASE_DIR = Path(__file__).resolve().parent
 PID_FILE = BASE_DIR / ".server.pid"
@@ -50,6 +51,7 @@ app.include_router(sync_router)
 app.include_router(correcao_router)
 app.include_router(feedback_router)
 app.include_router(busca_router)
+app.include_router(planejar_router)
 
 
 def _cleanup_port(port: int) -> None:
