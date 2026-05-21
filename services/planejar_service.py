@@ -116,7 +116,47 @@ Responda APENAS com JSON puro (sem markdown, sem texto antes/depois):
 }}"""
 
 
-async def planejar_elaboracao(paj_norm: str, timeout: int = 120) -> dict:
+PLANO_JSON_SCHEMA = {
+    "type": "object",
+    "required": [
+        "tipo_atuacao", "tipo_peca", "fundamentos_principais",
+        "fontes_citadas", "razoes_resumo", "raciocinio_completo", "confianca",
+    ],
+    "properties": {
+        "tipo_atuacao": {
+            "type": "string",
+            "enum": ["RECURSO", "DESPACHO_INTERNO", "ARQUIVAMENTO", "NAO_ATUAR"],
+        },
+        "tipo_peca": {
+            "type": "string",
+            "enum": [
+                "embargos_declaracao_tnu", "embargos_declaracao_stj",
+                "agravo_interno_tnu", "agravo_interno_stj",
+                "resp", "aresp", "re", "memoriais", "embargos_divergencia_stj",
+                "despacho_arquivamento", "despacho_acompanhamento", "nenhuma",
+            ],
+        },
+        "fundamentos_principais": {"type": "array", "items": {"type": "string"}},
+        "fontes_citadas": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "tipo": {"type": "string", "enum": ["decisao", "juris", "regimento", "lei"]},
+                    "ref": {"type": "string"},
+                },
+                "required": ["tipo", "ref"],
+            },
+        },
+        "razoes_resumo": {"type": "string"},
+        "raciocinio_completo": {"type": "string"},
+        "confianca": {"type": "string", "enum": ["alta", "media", "baixa"]},
+        "alertas": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+
+async def planejar_elaboracao(paj_norm: str, timeout: int = 180) -> dict:
     """Chama Claude CLI com prompt de planejamento. Retorna JSON parseado."""
     pasta = ENTRADA_DIR / paj_norm
     meta_f = pasta / "metadata.json"
@@ -133,7 +173,23 @@ async def planejar_elaboracao(paj_norm: str, timeout: int = 120) -> dict:
     decisao = _ler_decisao_recente(pasta)
     prompt = _montar_prompt(paj_original, meta, resumo, decisao)
 
-    cmd = [CLAUDE_CMD, "-p", prompt, "--output-format", "text"]
+    # --print: modo não-interativo
+    # --output-format json: retorna wrapper {"result": ..., "is_error": ...}
+    # --json-schema: força resposta seguir esquema
+    # --setting-sources user: ignora CLAUDE.md project (que confunde com tom conversacional)
+    # --append-system-prompt: reforça que é tarefa de extração
+    cmd = [
+        CLAUDE_CMD,
+        "--print",
+        "--output-format", "json",
+        "--json-schema", json.dumps(PLANO_JSON_SCHEMA),
+        "--setting-sources", "user",
+        "--append-system-prompt",
+        "Você é executor de tarefa estruturada. NÃO inicie conversa nem se "
+        "apresente. Apenas analise o caso e responda com JSON puro seguindo o "
+        "schema. Sem markdown, sem texto antes/depois.",
+        prompt,
+    ]
 
     try:
         proc = await asyncio.to_thread(
@@ -161,15 +217,47 @@ async def planejar_elaboracao(paj_norm: str, timeout: int = 120) -> dict:
             "stdout": proc.stdout[-500:],
         }
 
-    plano = _extrair_json(proc.stdout)
+    # Com --output-format json, Claude retorna wrapper: {"type":"result","result":"<string com JSON>",...}
+    plano = _extrair_plano_da_resposta(proc.stdout)
     if not plano:
         return {
             "ok": False,
             "erro": "Claude não retornou JSON parseável",
-            "resp_raw": proc.stdout[-1000:],
+            "resp_raw": proc.stdout[-2000:],
         }
 
     return {"ok": True, "plano": plano, "resp_raw": proc.stdout[:300]}
+
+
+def _extrair_plano_da_resposta(out: str) -> dict | None:
+    """Extrai plano (JSON estruturado) da resposta do Claude.
+
+    Com --output-format json + --json-schema, stdout vem como:
+      {"type":"result", "result":"", "structured_output": <dict>, ...}
+    O plano fica em `structured_output`. `result` pode estar vazio.
+
+    Sem --json-schema, plano fica como string em `result`.
+    """
+    try:
+        wrapper = json.loads(out.strip())
+        if isinstance(wrapper, dict):
+            # 1. structured_output (preferido — quando --json-schema valida)
+            so = wrapper.get("structured_output")
+            if isinstance(so, dict) and so:
+                return so
+            # 2. result como dict
+            result = wrapper.get("result", "")
+            if isinstance(result, dict):
+                return result
+            # 3. result como string contendo JSON
+            if isinstance(result, str) and result.strip():
+                parsed = _extrair_json(result)
+                if parsed:
+                    return parsed
+    except json.JSONDecodeError:
+        pass
+    # Fallback: tenta extrair JSON em qualquer lugar do output
+    return _extrair_json(out)
 
 
 def _extrair_json(s: str) -> dict | None:
