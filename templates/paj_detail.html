@@ -688,7 +688,7 @@
      x-show="aberto"
      style="display:none"
      class="fixed inset-0 z-50 bg-black/60 flex items-start justify-center p-4 overflow-y-auto">
-    <div class="bg-base-100 rounded-lg max-w-4xl w-full p-6 my-8" @click.outside="aberto=false">
+    <div class="bg-base-100 rounded-lg max-w-6xl w-full p-8 my-6 text-base" @click.outside="aberto=false">
         <div class="flex justify-between items-center mb-4">
             <div>
                 <h2 class="text-xl font-bold">Plano de Atuação — PAJ <span x-text="paj"></span></h2>
@@ -711,6 +711,19 @@
 
         <!-- Plano -->
         <div x-show="!carregando && plano" style="display:none" class="space-y-4">
+            <!-- BANNER plano resumido (destaque) -->
+            <div class="bg-primary/15 border-2 border-primary rounded-lg p-4">
+                <div class="text-xs uppercase tracking-wider text-primary font-bold">Plano proposto pelo Claude</div>
+                <div class="text-lg font-bold mt-1">
+                    <span x-text="plano.tipo_atuacao"></span>
+                    <span class="text-base-content/40">→</span>
+                    <span x-text="(plano.tipo_peca || '').replace(/_/g, ' ')"></span>
+                </div>
+                <div class="text-sm text-base-content/70 mt-1" x-show="plano.decisao_recorrida_descricao">
+                    <b>Em resposta a:</b> <span x-text="plano.decisao_recorrida_descricao"></span>
+                </div>
+            </div>
+
             <!-- Tipo de atuação + peça (lado a lado) -->
             <div class="grid grid-cols-2 gap-3">
                 <div>
@@ -757,8 +770,8 @@
 
             <!-- Análise narrativa (substitui fundamentos + razões) -->
             <div>
-                <label class="text-xs text-base-content/60">Análise completa (narrativa)</label>
-                <textarea class="textarea textarea-bordered w-full mt-1 text-sm" rows="10" x-model="plano.analise_completa"></textarea>
+                <label class="text-sm font-semibold text-base-content/70">Análise completa (narrativa)</label>
+                <textarea class="textarea textarea-bordered w-full mt-1 text-base leading-relaxed" rows="16" x-model="plano.analise_completa" style="font-size: 15px;"></textarea>
                 <p class="text-xs text-base-content/40 mt-1">Edite à vontade. Esse é o texto que orienta Claude na elaboração final.</p>
             </div>
 

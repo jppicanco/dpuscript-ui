@@ -19,7 +19,30 @@ async def serve_file(paj_norm: str, path: str):
 
     # TXT, JSON, MD — retorna como texto
     if "text" in content_type or "json" in content_type:
-        conteudo = arquivo.read_text(encoding="utf-8", errors="replace")
-        return PlainTextResponse(conteudo, media_type=content_type)
+        conteudo = _ler_texto_robusto(arquivo)
+        # Força UTF-8 no header da resposta pra browser renderizar acentos certos
+        media = content_type
+        if "charset" not in media.lower():
+            media += "; charset=utf-8"
+        return PlainTextResponse(conteudo, media_type=media)
 
     return FileResponse(arquivo, media_type=content_type)
+
+
+def _ler_texto_robusto(arquivo) -> str:
+    """Lê texto tentando múltiplos encodings.
+
+    PDFs convertidos via PyMuPDF/OCR podem ter sido salvos como UTF-8, CP1252
+    (Windows latin) ou Latin-1. Tenta na ordem; usa replace só como último
+    recurso pra não perder o arquivo inteiro com caracteres '?'.
+    """
+    raw = arquivo.read_bytes()
+    # BOM UTF-8 explícito
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig", errors="replace")
+    for enc in ("utf-8", "cp1252", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
