@@ -30,9 +30,14 @@
         </div>
         <div class="flex gap-2">
             <button class="btn btn-primary btn-sm tooltip tooltip-left"
-                    data-tip="Verifica caixa SISDPU + baixa pecas do e-Proc TNU e decisoes STJ/STF"
-                    onclick="runPipeline('/api/pipeline/run', 'Sincronizar PAJs')">
-                Sincronizar PAJs
+                    data-tip="Roda pipeline no M4 (24/7) + traz dados pro PC (recomendado)"
+                    onclick="runPipeline('/api/sync/atualizar', 'Atualizar agora (M4)')">
+                Atualizar agora
+            </button>
+            <button class="btn btn-ghost btn-sm tooltip tooltip-left"
+                    data-tip="Legado: roda pipeline local no PC. Use só se M4 indisponivel."
+                    onclick="runPipeline('/api/pipeline/run', 'Sincronizar PAJs (local)')">
+                Sincronizar (local)
             </button>
         </div>
     </div>

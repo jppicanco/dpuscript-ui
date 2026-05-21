@@ -1,0 +1,152 @@
+"""Serviço de sincronização M4 → PC.
+
+Pipeline canônico roda 24/7 no M4 (cron 08h15). Esta UI lê dados locais
+do PC, espelhados periodicamente ou sob demanda via "Atualizar agora".
+
+Fluxo do botão "Atualizar agora":
+1. SSH M4: chama preparar_pajs.py (gera/atualiza pastas + estado no M4)
+2. scp/rsync downstream: M4:/Users/macmini/dpu-workspace/ → PC:/E:/DPU/dpu-workspace/
+3. UI relê pastas locais
+
+Stream eventos via SSE pra UI mostrar progresso.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import queue
+import subprocess
+import threading
+from collections.abc import AsyncGenerator
+
+M4_HOST = "macmini@192.168.0.102"
+M4_PIPELINE_CWD = "/Users/macmini/dpu-workspace/dpuscript"
+M4_PYTHON = "/Users/macmini/jarbas/venv-dpu/bin/python"
+M4_DATA_DIR = "/Users/macmini/dpu-workspace/Entrada/dpuscript"
+M4_STATE_DIR = "/Users/macmini/dpu-workspace/dpuscript/estado"
+
+
+def _pc_data_dir() -> str:
+    """Pasta local PC pra onde fazer sync."""
+    # Usa config.DPUSCRIPT_DIR? Pra começar, hardcode.
+    return r"E:\DPU\dpu-workspace\Entrada\dpuscript"
+
+
+def _pc_state_dir() -> str:
+    return r"E:\DPU\dpu-workspace\dpuscript\estado"
+
+
+async def _run_subproc_streaming(
+    cmd: list[str], label: str = ""
+) -> AsyncGenerator[str, None]:
+    """Roda subprocess e faz yield de cada linha do stdout/stderr."""
+    if label:
+        yield f"[{label}] iniciando: {' '.join(cmd[:3])}...\n"
+
+    q: queue.Queue[str | None] = queue.Queue()
+
+    def _run():
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            for line in iter(proc.stdout.readline, b""):
+                q.put(line.decode("utf-8", errors="replace"))
+            proc.wait()
+            q.put(f"[{label}] exit code {proc.returncode}\n")
+        except Exception as e:
+            q.put(f"[{label}] ERRO: {type(e).__name__}: {e}\n")
+        finally:
+            q.put(None)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    while True:
+        try:
+            line = await asyncio.to_thread(q.get, True, 1.0)
+        except queue.Empty:
+            await asyncio.sleep(0.1)
+            continue
+        if line is None:
+            break
+        yield line
+
+
+async def atualizar_agora() -> AsyncGenerator[str, None]:
+    """Roda pipeline no M4 + scp downstream + sinaliza fim."""
+    yield "Iniciando atualização — pipeline roda no M4 + sync downstream\n"
+
+    # 1. SSH M4 chama pipeline (sem --full-prompt-max — modo lazy)
+    cmd_ssh = [
+        "ssh",
+        M4_HOST,
+        f"cd {M4_PIPELINE_CWD} && {M4_PYTHON} preparar_pajs.py",
+    ]
+    yield "\n=== FASE 1: pipeline no M4 ===\n"
+    async for linha in _run_subproc_streaming(cmd_ssh, label="M4"):
+        yield linha
+
+    # 2. Sync estado (pequeno, rápido)
+    yield "\n=== FASE 2: sync estado M4 → PC ===\n"
+    os.makedirs(_pc_state_dir(), exist_ok=True)
+    cmd_scp_estado = [
+        "scp",
+        f"{M4_HOST}:{M4_STATE_DIR}/pajs_processados.json",
+        os.path.join(_pc_state_dir(), "pajs_processados.json"),
+    ]
+    async for linha in _run_subproc_streaming(cmd_scp_estado, label="scp-estado"):
+        yield linha
+
+    # 3. Sync pastas dos PAJs (pode ser grande — usar tar+ssh pra eficiência)
+    yield "\n=== FASE 3: sync pastas PAJ M4 → PC ===\n"
+    os.makedirs(_pc_data_dir(), exist_ok=True)
+    # tar via ssh pra um arquivo temp, depois extrai no PC
+    tmp_tar = r"E:\DPU\dpu-workspace\Entrada\.sync_m4.tar.gz"
+    cmd_tar = [
+        "ssh",
+        M4_HOST,
+        f"cd {M4_DATA_DIR}/.. && tar -czf - dpuscript/",
+    ]
+    yield f"[sync] baixando arquivo {tmp_tar}\n"
+    with open(tmp_tar, "wb") as f:
+        proc = subprocess.run(cmd_tar, stdout=f, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        yield f"[sync] ERRO tar ssh: {proc.stderr.decode('utf-8', errors='replace')}\n"
+        return
+    yield f"[sync] tar baixado ({os.path.getsize(tmp_tar)} bytes), extraindo...\n"
+    cmd_extract = [
+        "tar",
+        "-xzf",
+        tmp_tar,
+        "-C",
+        r"E:\DPU\dpu-workspace\Entrada",
+    ]
+    async for linha in _run_subproc_streaming(cmd_extract, label="extract"):
+        yield linha
+    try:
+        os.remove(tmp_tar)
+    except Exception:
+        pass
+
+    yield "\n=== ATUALIZAÇÃO CONCLUÍDA ===\n"
+
+
+async def atualizar_apenas_estado() -> AsyncGenerator[str, None]:
+    """Sync rápido — só estado/pajs_processados.json (sem rodar pipeline M4).
+
+    Pro caso de JP já sabe que o cron rodou e só quer ver o estado novo.
+    """
+    yield "Sync rápido do estado (sem rodar pipeline)\n"
+    os.makedirs(_pc_state_dir(), exist_ok=True)
+    cmd = [
+        "scp",
+        f"{M4_HOST}:{M4_STATE_DIR}/pajs_processados.json",
+        os.path.join(_pc_state_dir(), "pajs_processados.json"),
+    ]
+    async for linha in _run_subproc_streaming(cmd, label="scp"):
+        yield linha
+    yield "Estado atualizado.\n"
