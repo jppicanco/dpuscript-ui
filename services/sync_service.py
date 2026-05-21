@@ -48,13 +48,27 @@ async def _run_subproc_streaming(
 
     def _run():
         try:
+            # PYTHONIOENCODING força subprocess Python a emitir UTF-8
+            # mesmo em Windows (que por default usa cp1252)
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["PYTHONUTF8"] = "1"
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                env=env,
             )
             for line in iter(proc.stdout.readline, b""):
-                q.put(line.decode("utf-8", errors="replace"))
+                # Tenta UTF-8 primeiro, fallback CP1252 (Windows default)
+                try:
+                    txt = line.decode("utf-8")
+                except UnicodeDecodeError:
+                    try:
+                        txt = line.decode("cp1252")
+                    except UnicodeDecodeError:
+                        txt = line.decode("utf-8", errors="replace")
+                q.put(txt)
             proc.wait()
             q.put(f"[{label}] exit code {proc.returncode}\n")
         except Exception as e:
@@ -150,3 +164,25 @@ async def atualizar_apenas_estado() -> AsyncGenerator[str, None]:
     async for linha in _run_subproc_streaming(cmd, label="scp"):
         yield linha
     yield "Estado atualizado.\n"
+
+
+async def reconciliar_apenas() -> AsyncGenerator[str, None]:
+    """Reconciliação rápida — só compara caixa SISDPU real vs estado local
+    e move PAJs concluídos pra dpuscript_arquivados/. NÃO baixa peças nem
+    processa novos PAJs. Rápido: ~30-60s.
+
+    Roda localmente (pipeline preparar_pajs.py --reconciliar-apenas) porque
+    é só leitura + mover pastas locais. Não precisa SSH M4.
+    """
+    yield "Reconciliação rápida — comparando caixa SISDPU vs estado local\n"
+    yield "(NÃO baixa peças. Só move PAJs concluídos pra arquivados.)\n\n"
+    import sys as _sys
+    cmd = [
+        _sys.executable,
+        "-X", "utf8",
+        r"E:\DPU\dpu-workspace\dpuscript\preparar_pajs.py",
+        "--reconciliar-apenas",
+    ]
+    async for linha in _run_subproc_streaming(cmd, label="reconcilia"):
+        yield linha
+    yield "\n=== RECONCILIAÇÃO CONCLUÍDA ===\n"

@@ -29,15 +29,20 @@
             </div>
         </div>
         <div class="flex gap-2">
+            <button class="btn btn-success btn-sm tooltip tooltip-left"
+                    data-tip="RAPIDO (~30-60s): só verifica caixa SISDPU e remove PAJs ja concluidos. NAO baixa pecas. Use sempre que concluir PAJ no SISDPU."
+                    onclick="runPipeline('/api/sync/reconciliar', 'Reconciliar caixa (rapido)')">
+                Reconciliar caixa (rápido)
+            </button>
             <button class="btn btn-primary btn-sm tooltip tooltip-left"
-                    data-tip="Roda pipeline no M4 (24/7) + traz dados pro PC (recomendado)"
-                    onclick="runPipeline('/api/sync/atualizar', 'Atualizar agora (M4)')">
-                Atualizar agora
+                    data-tip="COMPLETO (~5-20min): roda pipeline inteiro no M4 (baixa pecas TNU/STJ + OCR + classifica). Use 1x ao dia ou quando ha movimentacoes novas."
+                    onclick="runPipeline('/api/sync/atualizar', 'Atualizar tudo (M4)')">
+                Atualizar tudo
             </button>
             <button class="btn btn-ghost btn-sm tooltip tooltip-left"
-                    data-tip="Legado: roda pipeline local no PC. Use só se M4 indisponivel."
+                    data-tip="Legado: roda pipeline local no PC. Use so se M4 indisponivel."
                     onclick="runPipeline('/api/pipeline/run', 'Sincronizar PAJs (local)')">
-                Sincronizar (local)
+                Local (fallback)
             </button>
         </div>
     </div>
@@ -261,7 +266,7 @@ function dashboardApp() {
         filtroClassif: '',
         busca: '',
         ordemCampo: 'data_caixa',
-        ordemAsc: false,
+        ordemAsc: true,  // antigo→novo por default (JP request 2026-05-21)
         // Status de elaboracao por PAJ (polling de /api/elaborar/status)
         statusMap: {},
         stats: {running: 0, queued: 0, max_parallel: 5},

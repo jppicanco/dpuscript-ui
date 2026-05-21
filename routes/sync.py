@@ -7,7 +7,11 @@
 from fastapi import APIRouter
 from sse_starlette.sse import EventSourceResponse
 
-from services.sync_service import atualizar_agora, atualizar_apenas_estado
+from services.sync_service import (
+    atualizar_agora,
+    atualizar_apenas_estado,
+    reconciliar_apenas,
+)
 
 router = APIRouter(prefix="/api/sync")
 
@@ -28,3 +32,17 @@ async def atualizar():
 async def estado():
     """Sync rápido só do estado (sem rodar pipeline M4)."""
     return EventSourceResponse(_stream(atualizar_apenas_estado()))
+
+
+@router.get("/reconciliar")
+async def reconciliar():
+    """Reconciliação rápida — só caixa SISDPU vs estado local (~30-60s).
+
+    NÃO baixa peças, NÃO processa novos PAJs. Apenas:
+    - Lê caixa SISDPU real
+    - Move PAJs concluídos (que sumiram da caixa) pra arquivados
+    - Atualiza estado
+
+    Pro caso comum: JP concluiu PAJ no SISDPU e quer UI refletir já.
+    """
+    return EventSourceResponse(_stream(reconciliar_apenas()))
