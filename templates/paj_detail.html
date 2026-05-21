@@ -181,6 +181,14 @@
         <h3 class="text-lg font-semibold mb-4">Descricao da movimentacao na caixa</h3>
         <p class="text-sm text-base-content/80 whitespace-pre-wrap mb-6">{{ meta.desc_mov_caixa or '—' }}</p>
 
+        {% if dados.resumo_curto %}
+        <h3 class="text-lg font-semibold mb-2">Resumo automatico</h3>
+        <details class="mb-6 bg-base-300/40 rounded p-3" open>
+            <summary class="cursor-pointer text-xs text-base-content/60 mb-1">Gerado pelo pipeline (resumo_curto.md)</summary>
+            <pre class="text-xs whitespace-pre-wrap font-mono mt-2">{{ dados.resumo_curto }}</pre>
+        </details>
+        {% endif %}
+
         <h3 class="text-lg font-semibold mb-4">Dados do processo</h3>
         <div class="overflow-x-auto">
             <table class="table table-sm">

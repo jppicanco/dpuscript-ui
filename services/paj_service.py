@@ -198,7 +198,16 @@ def ler_paj(paj_norm: str) -> dict | None:
     # Separados em duas listas:
     #   despachos  — documentos administrativos para o SISDPU (despacho*.txt/docx/pdf)
     #   pecas_judiciais — peças processuais de fato (recursos, agravos, embargos, memoriais…)
-    IGNORAR = {"metadata.json", "eventos_tnu.json", "datajud.json", "PROMPT_MAX.md", "elaboracao.json"}
+    IGNORAR = {
+        "metadata.json",
+        "eventos_tnu.json",
+        "datajud.json",
+        "PROMPT_MAX.md",
+        "elaboracao.json",
+        "resumo_curto.md",         # artefato do pipeline (R3) — não é peça
+        "prazos_detectados.json",  # artefato do módulo prazos — não é peça
+        "resumo.md",                # legado
+    }
     PREFIXOS_DESPACHO = ("despacho",)
 
     despachos: list[dict] = []
@@ -224,9 +233,19 @@ def ler_paj(paj_norm: str) -> dict | None:
     movs = det.get("movimentacoes", []) or []
     movs_sorted = sorted(movs, key=lambda m: int(m.get("seq", 0) or 0), reverse=True)
 
+    # Resumo curto (gerado pelo pipeline) — mostrado no tab Resumo
+    resumo_curto = ""
+    rcf = pasta / "resumo_curto.md"
+    if rcf.exists():
+        try:
+            resumo_curto = rcf.read_text(encoding="utf-8")
+        except Exception:
+            resumo_curto = ""
+
     return {
         "metadata": metadata,
         "prompt_max": prompt_max,
+        "resumo_curto": resumo_curto,
         "pecas": pecas,
         "pecas_por_categoria": pecas_por_categoria,
         "decisoes": decisoes,
