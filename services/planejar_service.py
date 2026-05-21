@@ -27,8 +27,21 @@ import re
 import subprocess
 from pathlib import Path
 
-from config import ENTRADA_DIR
+from config import ENTRADA_DIR, DPUSCRIPT_DIR
 from services.chat_service import CLAUDE_CMD
+
+REGRAS_ATUACAO_FILE = DPUSCRIPT_DIR / "memory" / "regras_atuacao.md"
+
+
+def _carregar_regras_atuacao() -> str:
+    """Lê regras aprendidas (editadas por JP). Carregadas a cada chamada
+    — JP atualiza arquivo e próxima chamada já considera."""
+    if not REGRAS_ATUACAO_FILE.exists():
+        return ""
+    try:
+        return REGRAS_ATUACAO_FILE.read_text(encoding="utf-8")
+    except Exception:
+        return ""
 
 
 def _env_sem_claudecode() -> dict:
@@ -86,7 +99,9 @@ def _listar_arquivos_pecas(pasta: Path) -> str:
 
 def _montar_prompt(paj: str, meta: dict, resumo: str, decisao: str, arquivos_locais: str = "") -> str:
     det = meta.get("detalhes_sisdpu", {}) or {}
-    return f"""Você é assistente jurídico da DPU (TNU+STJ). JP é Defensor Cat. Especial.
+    regras = _carregar_regras_atuacao()
+    bloco_regras = f"\n\nREGRAS APRENDIDAS (correções acumuladas do Defensor — RESPEITE):\n{regras}\n" if regras else ""
+    return f"""Você é assistente jurídico da DPU (TNU+STJ). JP é Defensor Cat. Especial.{bloco_regras}
 
 TAREFA: analisar o PAJ e propor um PLANO DE ATUAÇÃO. JP vai revisar antes de executar.
 
