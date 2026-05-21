@@ -307,7 +307,16 @@ def ler_elaboracao_disco(paj_norm: str) -> dict | None:
             return json.loads(f.read_text(encoding="utf-8"))
 
         # Fallback: tem arquivo gerado na raiz?
-        IGNORAR = {"metadata.json", "eventos_tnu.json", "datajud.json", "PROMPT_MAX.md", "elaboracao.json"}
+        IGNORAR = {
+            "metadata.json",
+            "eventos_tnu.json",
+            "datajud.json",
+            "PROMPT_MAX.md",
+            "elaboracao.json",
+            "resumo_curto.md",        # gerado pelo pipeline (R3)
+            "prazos_detectados.json", # gerado pelo pipeline (módulo prazos)
+            "resumo.md",              # legado
+        }
         gerados = [x for x in pasta.iterdir() if x.is_file() and x.name not in IGNORAR]
         if gerados:
             nomes = ", ".join(sorted(x.name for x in gerados))
