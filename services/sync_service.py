@@ -223,9 +223,11 @@ async def reconciliar_apenas() -> AsyncGenerator[str, None]:
     """
     yield "Reconciliação rápida — comparando caixa SISDPU vs estado local\n"
     yield "(NÃO baixa peças. Só move PAJs concluídos pra arquivados.)\n\n"
-    import sys as _sys
+    # IMPORTANTE: usar venv do dpu-workspace (tem fitz/playwright/etc),
+    # não o do dpuscript-ui (sem essas deps).
+    python_dpu_workspace = r"E:\DPU\dpu-workspace\dpuscript\.venv\Scripts\python.exe"
     cmd = [
-        _sys.executable,
+        python_dpu_workspace,
         "-X", "utf8",
         r"E:\DPU\dpu-workspace\dpuscript\preparar_pajs.py",
         "--reconciliar-apenas",
