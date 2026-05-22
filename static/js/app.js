@@ -129,6 +129,32 @@ function cancelarPipeline() {
     _pipelineToken = null;
 }
 
+/* Chat livre — brainstorm vinculado ao PAJ */
+
+async function abrirChatLivre(pajNorm) {
+    try {
+        // Lista conversas existentes
+        const r = await fetch('/api/chat-livre/paj/' + encodeURIComponent(pajNorm) + '/conversas');
+        const data = await r.json();
+        if (data.conversas && data.conversas.length > 0) {
+            // Reabre a mais recente
+            const ultima = data.conversas.sort((a, b) => b.atualizado_em.localeCompare(a.atualizado_em))[0];
+            window.location.href = '/chat-livre?conv=' + ultima.id;
+            return;
+        }
+        // Cria nova
+        const r2 = await fetch('/api/chat-livre/paj/' + encodeURIComponent(pajNorm) + '/conversas', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({titulo: 'Discussão ' + new Date().toLocaleDateString('pt-BR')}),
+        });
+        const conv = await r2.json();
+        window.location.href = '/chat-livre?conv=' + conv.id;
+    } catch (e) {
+        showToast('Erro ao abrir chat: ' + e.message, 'error');
+    }
+}
+
 /* Docgen — gerar DOCX/PDF a partir de .txt do PAJ */
 
 var _docgenPaj = null;
