@@ -14,6 +14,23 @@
                     — pipeline rodou em <span x-text="ultimaExecucao" class="text-primary"></span>
                 </span>
             </p>
+            <!-- Sync health badge -->
+            <div class="flex gap-2 mt-2 items-center" x-show="health.status">
+                <span class="badge badge-sm"
+                      :class="{
+                          'badge-success': health.status === 'ok',
+                          'badge-warning': health.status === 'warning',
+                          'badge-error': health.status === 'error'
+                      }"
+                      :title="'M4 cron: ' + (health.m4 && health.m4.last_fim_line ? health.m4.last_fim_line : 'sem dados') + '\nVerificado: ' + (health.checked_at || '')">
+                    Sync M4: <span x-text="health.m4 ? health.m4.age_human : '?'" class="ml-1 font-mono"></span>
+                </span>
+                <span class="badge badge-sm badge-ghost"
+                      :title="'Arquivo: ' + (health.pc && health.pc.file ? health.pc.file : '')">
+                    PC local: <span x-text="health.pc ? health.pc.age_human : '?'" class="ml-1 font-mono"></span>
+                </span>
+                <span x-show="health.m4 && !health.m4.reachable" class="text-xs text-error" x-text="'M4 unreachable: ' + (health.m4 ? health.m4.error : '')"></span>
+            </div>
             <!-- Indicador de concorrencia -->
             <div class="flex gap-2 mt-2" x-show="stats.running > 0 || stats.queued > 0">
                 <span class="badge badge-warning badge-sm">
@@ -274,6 +291,7 @@ function dashboardApp() {
         // Status de elaboracao por PAJ (polling de /api/elaborar/status)
         statusMap: {},
         stats: {running: 0, queued: 0, max_parallel: 5},
+        health: {},
 
         async init() {
             const resp = await fetch('/api/pajs');
@@ -284,6 +302,18 @@ function dashboardApp() {
             // Inicia polling de status + stats
             await this.atualizarStatus();
             setInterval(() => this.atualizarStatus(), 3000);
+            // Sync health: fetch agora + a cada 60s
+            await this.atualizarHealth();
+            setInterval(() => this.atualizarHealth(), 60000);
+        },
+
+        async atualizarHealth() {
+            try {
+                const r = await fetch('/api/sync/health');
+                this.health = await r.json();
+            } catch (e) {
+                this.health = {status: 'error', m4: {age_human: '?', reachable: false, error: String(e)}, pc: {age_human: '?'}};
+            }
         },
 
         async atualizarStatus() {

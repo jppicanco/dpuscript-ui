@@ -11,6 +11,7 @@ from services.sync_service import (
     atualizar_agora,
     atualizar_apenas_estado,
     baixar_do_m4,
+    health as sync_health,
     reconciliar_apenas,
 )
 
@@ -42,6 +43,15 @@ async def baixar():
     Pega o que o cron M4 (4x/dia) já preparou. Para uso diário.
     """
     return EventSourceResponse(_stream(baixar_do_m4()))
+
+
+@router.get("/health")
+async def health():
+    """Estado de sync M4↔PC: idade do cron M4 + idade do estado local.
+
+    Resposta cacheada por 60s (evita SSH a cada page load).
+    """
+    return sync_health()
 
 
 @router.get("/reconciliar")

@@ -18,7 +18,9 @@ import os
 import queue
 import subprocess
 import threading
+import time
 from collections.abc import AsyncGenerator
+from datetime import datetime, timezone
 
 M4_HOST = "macmini@192.168.0.102"
 M4_PIPELINE_CWD = "/Users/macmini/dpu-workspace/dpuscript"
@@ -235,3 +237,112 @@ async def reconciliar_apenas() -> AsyncGenerator[str, None]:
     async for linha in _run_subproc_streaming(cmd, label="reconcilia"):
         yield linha
     yield "\n=== RECONCILIAÇÃO CONCLUÍDA ===\n"
+
+
+_HEALTH_CACHE: dict[str, object] = {"ts": 0.0, "data": None}
+_HEALTH_CACHE_TTL = 60.0
+_M4_LOG = "/Users/macmini/jarbas/data/logs/preparar-pajs.log"
+
+
+def _classify_age(seconds: float | None) -> str:
+    """Classifica idade em ok/warning/error.
+
+    Cron roda 4x/dia, intervalos máx ~6h (21:00 → 08:15 = 11h15 noturno).
+    - ok: <= 12h
+    - warning: 12h-26h (perdeu 1 ciclo)
+    - error: > 26h ou indisponível
+    """
+    if seconds is None:
+        return "error"
+    if seconds <= 12 * 3600:
+        return "ok"
+    if seconds <= 26 * 3600:
+        return "warning"
+    return "error"
+
+
+def _fmt_age(seconds: float | None) -> str:
+    if seconds is None:
+        return "indisponível"
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}min"
+    if seconds < 86400:
+        h = seconds / 3600
+        return f"{h:.1f}h"
+    d = seconds / 86400
+    return f"{d:.1f}d"
+
+
+def _m4_last_cron_run() -> dict[str, object]:
+    """Pega timestamp do último 'FIM:' marker no log M4 via SSH (timeout 4s)."""
+    cmd = [
+        "ssh",
+        "-o", "ConnectTimeout=3",
+        "-o", "BatchMode=yes",
+        M4_HOST,
+        f"stat -f '%m' {_M4_LOG} 2>/dev/null && grep -E 'FIM: ' {_M4_LOG} | tail -1",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=5)
+        out = proc.stdout.decode("utf-8", errors="replace").strip().splitlines()
+        if not out:
+            return {"reachable": False, "error": proc.stderr.decode("utf-8", errors="replace")[:200]}
+        mtime_epoch = float(out[0])
+        last_fim = out[1] if len(out) > 1 else ""
+        return {
+            "reachable": True,
+            "log_mtime_epoch": mtime_epoch,
+            "last_fim_line": last_fim,
+        }
+    except subprocess.TimeoutExpired:
+        return {"reachable": False, "error": "ssh timeout"}
+    except Exception as e:
+        return {"reachable": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def health() -> dict[str, object]:
+    """Estado de sync M4↔PC. Cache 60s pra não SSH a cada page load."""
+    now = time.time()
+    cached = _HEALTH_CACHE.get("data")
+    if cached and now - float(_HEALTH_CACHE["ts"]) < _HEALTH_CACHE_TTL:
+        return cached  # type: ignore[return-value]
+
+    pc_state_file = os.path.join(_pc_state_dir(), "pajs_processados.json")
+    pc_mtime = os.path.getmtime(pc_state_file) if os.path.exists(pc_state_file) else None
+    pc_age = (now - pc_mtime) if pc_mtime else None
+
+    m4 = _m4_last_cron_run()
+    m4_mtime = m4.get("log_mtime_epoch") if m4.get("reachable") else None
+    m4_age = (now - float(m4_mtime)) if m4_mtime else None
+
+    pc_status = _classify_age(pc_age)
+    m4_status = _classify_age(m4_age) if m4.get("reachable") else "error"
+    overall = "error" if "error" in (pc_status, m4_status) else (
+        "warning" if "warning" in (pc_status, m4_status) else "ok"
+    )
+
+    data: dict[str, object] = {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "pc": {
+            "file": pc_state_file,
+            "mtime_epoch": pc_mtime,
+            "age_seconds": pc_age,
+            "age_human": _fmt_age(pc_age),
+            "status": pc_status,
+        },
+        "m4": {
+            "reachable": m4.get("reachable", False),
+            "log_mtime_epoch": m4_mtime,
+            "age_seconds": m4_age,
+            "age_human": _fmt_age(m4_age),
+            "last_fim_line": m4.get("last_fim_line", ""),
+            "error": m4.get("error", ""),
+            "status": m4_status,
+        },
+        "status": overall,
+    }
+    _HEALTH_CACHE["ts"] = now
+    _HEALTH_CACHE["data"] = data
+    return data
