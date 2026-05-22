@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Skills{% endblock %}
+
+{% block content %}
+<div x-data="skillsApp()" x-init="init()">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+        <div>
+            <h2 class="text-2xl font-bold">Skills do workspace</h2>
+            <p class="text-sm text-base-content/60 mt-1">
+                Lidas dinamicamente de <code class="text-xs">E:\DPU\dpu-workspace\skills\</code>.
+                <span x-text="skills.length"></span> skill(s) ativa(s) em
+                <span x-text="grupos.length"></span> grupo(s).
+            </p>
+        </div>
+        <div>
+            <button class="btn btn-sm btn-ghost" @click="recarregar()">
+                <span x-show="!carregando">↻ Recarregar</span>
+                <span x-show="carregando" class="loading loading-spinner loading-xs"></span>
+            </button>
+        </div>
+    </div>
+
+    <template x-for="grupo in grupos" :key="grupo">
+        <div class="mb-6">
+            <h3 class="text-lg font-semibold capitalize border-b border-base-300 pb-1 mb-3"
+                x-text="grupo"></h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <template x-for="s in skillsDoGrupo(grupo)" :key="s.slug">
+                    <div class="card bg-base-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div class="card-body p-4">
+                            <div class="flex items-start justify-between gap-2">
+                                <h4 class="font-semibold text-sm" x-text="s.label"></h4>
+                                <code class="text-xs text-base-content/50" x-text="s.slug"></code>
+                            </div>
+                            <p class="text-xs text-base-content/70 mt-1" x-text="s.descricao || '(sem descricao)'"></p>
+                            <div class="card-actions justify-end mt-2">
+                                <a class="link link-primary text-xs"
+                                   :href="'/files/_skill/' + s.caminho"
+                                   target="_blank">
+                                    Ver SKILL.md
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </template>
+
+    <div x-show="!skills.length && !carregando" class="alert alert-info">
+        <span>Nenhuma skill encontrada. Verifique <code>SKILLS_DIR</code> no config.</span>
+    </div>
+</div>
+
+<script>
+function skillsApp() {
+    return {
+        skills: [],
+        grupos: [],
+        carregando: false,
+
+        async init() {
+            await this.carregar();
+        },
+
+        async carregar() {
+            this.carregando = true;
+            try {
+                const r = await fetch('/api/skills');
+                const d = await r.json();
+                this.skills = d.skills || [];
+                this.grupos = d.grupos || [];
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            } finally {
+                this.carregando = false;
+            }
+        },
+
+        async recarregar() {
+            this.carregando = true;
+            try {
+                await fetch('/api/skills/invalidar-cache', {method: 'POST'});
+                await this.carregar();
+                showToast('Cache invalidado — skills relidas', 'info');
+            } catch (e) {
+                showToast('Erro: ' + e.message, 'error');
+            }
+        },
+
+        skillsDoGrupo(g) {
+            return this.skills.filter(s => s.grupo === g);
+        },
+    };
+}
+</script>
+{% endblock %}
