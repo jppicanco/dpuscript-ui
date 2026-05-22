@@ -11,6 +11,7 @@ load_dotenv(Path(__file__).parent / ".env")
 DPU_WORKSPACE = Path(os.getenv("DPU_WORKSPACE", r"E:\DPU\dpu-workspace"))
 DPUSCRIPT_DIR = DPU_WORKSPACE / "dpuscript"
 ENTRADA_DIR = DPU_WORKSPACE / "Entrada" / "dpuscript"
+ARQUIVADOS_DIR = DPU_WORKSPACE / "Entrada" / "dpuscript_arquivados"
 ESTADO_FILE = DPUSCRIPT_DIR / "estado" / "pajs_processados.json"
 
 # Validacao basica

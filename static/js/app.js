@@ -129,6 +129,154 @@ function cancelarPipeline() {
     _pipelineToken = null;
 }
 
+/* Limpeza de anexos (modal — preview + execute) */
+
+var _limpezaPajAtual = null;
+var _limpezaPreview = null;
+
+function _fmtBytes(n) {
+    if (n == null) return '—';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+    return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+async function abrirLimpezaModal(pajNorm) {
+    _limpezaPajAtual = pajNorm;
+    var modal = document.getElementById('limpeza-modal');
+    if (!modal) return;
+
+    // Reset UI
+    document.getElementById('limpeza-loading').style.display = '';
+    document.getElementById('limpeza-conteudo').style.display = 'none';
+    document.getElementById('limpeza-resultado').style.display = 'none';
+    document.getElementById('limpeza-erro').style.display = 'none';
+    document.getElementById('limpeza-confirmar').checked = false;
+    var forcarEl = document.getElementById('limpeza-forcar');
+    if (forcarEl) forcarEl.checked = false;
+    document.getElementById('limpeza-btn-executar').disabled = true;
+
+    modal.showModal();
+
+    try {
+        var resp = await fetch('/api/paj/' + encodeURIComponent(pajNorm) + '/limpar-anexos/preview');
+        var data = await resp.json();
+        _limpezaPreview = data;
+
+        if (!data.ok) {
+            _showLimpezaErro(data.erro || 'Falha no preview');
+            return;
+        }
+
+        // Stats
+        document.getElementById('limpeza-n-remover').textContent = data.arquivos_a_remover.length;
+        document.getElementById('limpeza-bytes-liberar').textContent = _fmtBytes(data.bytes_total_disponivel);
+        document.getElementById('limpeza-n-preservar').textContent = data.arquivos_preservados.length;
+
+        // Listas
+        var tbodyRem = document.getElementById('limpeza-lista-remover');
+        tbodyRem.innerHTML = '';
+        data.arquivos_a_remover.forEach(function(a) {
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td class="font-mono">' + a.nome + '</td>' +
+                           '<td class="text-right">' + (a.tamanho / 1024).toFixed(1) + '</td>' +
+                           '<td>' + (a.tem_ocr ? '<span class="text-success">sim</span>' : '<span class="text-error">não</span>') + '</td>';
+            tbodyRem.appendChild(tr);
+        });
+
+        var tbodyPres = document.getElementById('limpeza-lista-preservar');
+        tbodyPres.innerHTML = '';
+        data.arquivos_preservados.forEach(function(a) {
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td class="font-mono">' + a.nome + '</td>' +
+                           '<td class="text-right">' + (a.tamanho / 1024).toFixed(1) + '</td>';
+            tbodyPres.appendChild(tr);
+        });
+
+        // Bloqueios
+        var bloqEl = document.getElementById('limpeza-bloqueios');
+        if (data.motivos_bloqueio && data.motivos_bloqueio.length) {
+            bloqEl.style.display = '';
+            var motUl = document.getElementById('limpeza-motivos');
+            motUl.innerHTML = '';
+            data.motivos_bloqueio.forEach(function(m) {
+                var li = document.createElement('li');
+                li.textContent = m;
+                motUl.appendChild(li);
+            });
+        } else {
+            bloqEl.style.display = 'none';
+        }
+
+        document.getElementById('limpeza-loading').style.display = 'none';
+        document.getElementById('limpeza-conteudo').style.display = '';
+
+        // Habilita botao quando confirmar marcado + (sem bloqueio OU forcar marcado)
+        _ligarHandlersConfirmacao();
+    } catch (e) {
+        _showLimpezaErro('Erro: ' + e.message);
+    }
+}
+
+function _ligarHandlersConfirmacao() {
+    var confEl = document.getElementById('limpeza-confirmar');
+    var forcarEl = document.getElementById('limpeza-forcar');
+    var btn = document.getElementById('limpeza-btn-executar');
+
+    function refresh() {
+        if (!_limpezaPreview) { btn.disabled = true; return; }
+        var bloqueado = _limpezaPreview.motivos_bloqueio && _limpezaPreview.motivos_bloqueio.length > 0;
+        var podeExecutar = confEl.checked && (!bloqueado || (forcarEl && forcarEl.checked));
+        btn.disabled = !podeExecutar || _limpezaPreview.arquivos_a_remover.length === 0;
+    }
+    confEl.onchange = refresh;
+    if (forcarEl) forcarEl.onchange = refresh;
+}
+
+async function executarLimpeza() {
+    if (!_limpezaPajAtual) return;
+    var btn = document.getElementById('limpeza-btn-executar');
+    var forcarEl = document.getElementById('limpeza-forcar');
+    var forcar = forcarEl && forcarEl.checked;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading loading-spinner loading-xs"></span> Apagando...';
+
+    try {
+        var url = '/api/paj/' + encodeURIComponent(_limpezaPajAtual) + '/limpar-anexos/executar?forcar=' + (forcar ? 'true' : 'false');
+        var resp = await fetch(url, {method: 'POST'});
+        var data = await resp.json();
+        if (!data.ok) {
+            _showLimpezaErro(data.erro || 'Falha na execucao');
+            return;
+        }
+        var msg = 'Removidos ' + data.removidos + ' arquivo(s), ' + _fmtBytes(data.bytes_liberados) + ' liberados.';
+        var resEl = document.getElementById('limpeza-resultado');
+        document.getElementById('limpeza-resultado-msg').textContent = msg;
+        resEl.style.display = '';
+        showToast(msg, 'success');
+        btn.innerHTML = 'Concluído';
+    } catch (e) {
+        _showLimpezaErro('Erro: ' + e.message);
+    }
+}
+
+function _showLimpezaErro(msg) {
+    document.getElementById('limpeza-loading').style.display = 'none';
+    document.getElementById('limpeza-conteudo').style.display = '';
+    var erEl = document.getElementById('limpeza-erro');
+    document.getElementById('limpeza-erro-msg').textContent = msg;
+    erEl.style.display = '';
+    showToast(msg, 'error');
+}
+
+function fecharLimpezaModal() {
+    var modal = document.getElementById('limpeza-modal');
+    if (modal) modal.close();
+    _limpezaPajAtual = null;
+    _limpezaPreview = null;
+}
+
 /* Elaborar Peca (fluxo novo — background + polling + modal global) */
 
 // Guarda o PAJ atual do modal pra funcoes auxiliares

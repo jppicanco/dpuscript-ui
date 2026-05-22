@@ -40,6 +40,11 @@
                     onclick="runPipeline('/api/pipeline/run/{{ paj_norm }}', 'Reprocessar {{ meta.paj }}')">
                 Reprocessar
             </button>
+            <button class="btn btn-sm btn-ghost tooltip tooltip-bottom"
+                    data-tip="Apaga PDFs/DOCX originais pós-OCR (preserva .txt). Libera disco."
+                    onclick="abrirLimpezaModal('{{ paj_norm }}')">
+                Limpar anexos
+            </button>
 
             <!-- Botao Elaborar: 3 estados (idle / running / done) -->
             <!-- Novo fluxo: abre modal de planejamento (R7) -->
