@@ -11,6 +11,7 @@ from services.sync_service import (
     atualizar_agora,
     atualizar_apenas_estado,
     baixar_do_m4,
+    cancel_token,
     health as sync_health,
     reconciliar_apenas,
 )
@@ -25,24 +26,24 @@ async def _stream(gen):
 
 
 @router.get("/atualizar")
-async def atualizar():
+async def atualizar(token: str | None = None):
     """Roda pipeline no M4 + traz dados pro PC."""
-    return EventSourceResponse(_stream(atualizar_agora()))
+    return EventSourceResponse(_stream(atualizar_agora(token=token)))
 
 
 @router.get("/estado")
-async def estado():
+async def estado(token: str | None = None):
     """Sync rápido só do estado (sem rodar pipeline M4)."""
-    return EventSourceResponse(_stream(atualizar_apenas_estado()))
+    return EventSourceResponse(_stream(atualizar_apenas_estado(token=token)))
 
 
 @router.get("/baixar-do-m4")
-async def baixar():
+async def baixar(token: str | None = None):
     """Sync rápido: rsync M4→PC sem rodar pipeline. ~30-60s.
 
     Pega o que o cron M4 (4x/dia) já preparou. Para uso diário.
     """
-    return EventSourceResponse(_stream(baixar_do_m4()))
+    return EventSourceResponse(_stream(baixar_do_m4(token=token)))
 
 
 @router.get("/health")
@@ -55,7 +56,7 @@ async def health():
 
 
 @router.get("/reconciliar")
-async def reconciliar():
+async def reconciliar(token: str | None = None):
     """Reconciliação rápida — só caixa SISDPU vs estado local (~30-60s).
 
     NÃO baixa peças, NÃO processa novos PAJs. Apenas:
@@ -65,4 +66,12 @@ async def reconciliar():
 
     Pro caso comum: JP concluiu PAJ no SISDPU e quer UI refletir já.
     """
-    return EventSourceResponse(_stream(reconciliar_apenas()))
+    return EventSourceResponse(_stream(reconciliar_apenas(token=token)))
+
+
+@router.post("/cancel/{token}")
+async def cancel(token: str):
+    """Mata subprocess rastreado sob `token`. Front-end gera token aleatório
+    quando inicia sync e passa via query string ?token=...; aqui mata.
+    """
+    return cancel_token(token)

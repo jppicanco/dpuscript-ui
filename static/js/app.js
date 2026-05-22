@@ -31,6 +31,11 @@ document.addEventListener('htmx:responseError', function(evt) {
 
 /* Pipeline — streaming SSE via EventSource */
 var _pipelineSource = null;
+var _pipelineToken = null;
+
+function _genToken() {
+    return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
 
 function runPipeline(url, title) {
     var modal = document.getElementById('pipeline-modal');
@@ -38,6 +43,7 @@ function runPipeline(url, title) {
     var statusEl = document.getElementById('pipeline-status');
     var titleEl = document.getElementById('pipeline-title');
     var closeBtn = document.getElementById('pipeline-close-btn');
+    var cancelBtn = document.getElementById('pipeline-cancel-btn');
 
     if (!modal || !logEl) return;
 
@@ -47,6 +53,7 @@ function runPipeline(url, title) {
     statusEl.textContent = 'rodando...';
     statusEl.className = 'badge badge-sm badge-warning';
     closeBtn.disabled = true;
+    if (cancelBtn) cancelBtn.style.display = '';
     modal.showModal();
 
     // Fecha stream anterior se houver
@@ -55,7 +62,9 @@ function runPipeline(url, title) {
         _pipelineSource = null;
     }
 
-    _pipelineSource = new EventSource(url);
+    _pipelineToken = _genToken();
+    var sep = url.indexOf('?') >= 0 ? '&' : '?';
+    _pipelineSource = new EventSource(url + sep + 'token=' + _pipelineToken);
 
     _pipelineSource.addEventListener('log', function(e) {
         logEl.textContent += e.data + '\n';
@@ -68,8 +77,10 @@ function runPipeline(url, title) {
         statusEl.textContent = 'concluido';
         statusEl.className = 'badge badge-sm badge-success';
         closeBtn.disabled = false;
+        if (cancelBtn) cancelBtn.style.display = 'none';
         _pipelineSource.close();
         _pipelineSource = null;
+        _pipelineToken = null;
         showToast('Pipeline concluido', 'success');
     });
 
@@ -77,11 +88,45 @@ function runPipeline(url, title) {
         statusEl.textContent = 'erro/desconectado';
         statusEl.className = 'badge badge-sm badge-error';
         closeBtn.disabled = false;
+        if (cancelBtn) cancelBtn.style.display = 'none';
         if (_pipelineSource) {
             _pipelineSource.close();
             _pipelineSource = null;
         }
+        _pipelineToken = null;
     };
+}
+
+function cancelarPipeline() {
+    var statusEl = document.getElementById('pipeline-status');
+    var cancelBtn = document.getElementById('pipeline-cancel-btn');
+    var closeBtn = document.getElementById('pipeline-close-btn');
+    if (!_pipelineToken) return;
+    var token = _pipelineToken;
+    // Fecha stream cliente imediato
+    if (_pipelineSource) {
+        _pipelineSource.close();
+        _pipelineSource = null;
+    }
+    if (statusEl) {
+        statusEl.textContent = 'cancelando...';
+        statusEl.className = 'badge badge-sm badge-warning';
+    }
+    // Pede backend pra matar subprocess
+    fetch('/api/sync/cancel/' + encodeURIComponent(token), {method: 'POST'})
+        .then(function() {
+            if (statusEl) {
+                statusEl.textContent = 'cancelado';
+                statusEl.className = 'badge badge-sm badge-ghost';
+            }
+            if (cancelBtn) cancelBtn.style.display = 'none';
+            if (closeBtn) closeBtn.disabled = false;
+            showToast('Pipeline cancelado', 'warning');
+        })
+        .catch(function(e) {
+            showToast('Erro ao cancelar: ' + e.message, 'error');
+        });
+    _pipelineToken = null;
 }
 
 /* Elaborar Peca (fluxo novo — background + polling + modal global) */

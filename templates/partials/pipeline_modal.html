@@ -5,6 +5,10 @@
             <h3 class="font-bold text-lg" id="pipeline-title">Pipeline</h3>
             <div class="flex gap-2">
                 <span id="pipeline-status" class="badge badge-sm badge-ghost">parado</span>
+                <button type="button" class="btn btn-sm btn-error" id="pipeline-cancel-btn"
+                        onclick="cancelarPipeline()" style="display:none;">
+                    Cancelar
+                </button>
                 <form method="dialog">
                     <button class="btn btn-sm btn-ghost" id="pipeline-close-btn">X</button>
                 </form>

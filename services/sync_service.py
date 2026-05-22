@@ -39,10 +39,48 @@ def _pc_state_dir() -> str:
     return r"E:\DPU\dpu-workspace\dpuscript\estado"
 
 
+_ACTIVE_PROCS: dict[str, subprocess.Popen] = {}
+_CANCELLED_TOKENS: set[str] = set()
+
+
+def cancel_token(token: str) -> dict:
+    """Marca token cancelado + mata subprocesso atual (se houver).
+
+    Generator do sync verifica `_CANCELLED_TOKENS` entre fases pra abortar.
+    """
+    _CANCELLED_TOKENS.add(token)
+    proc = _ACTIVE_PROCS.get(token)
+    if not proc:
+        return {"ok": True, "killed": False, "reason": "nenhum subprocess ativo (token marcado cancelado)"}
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        return {"ok": True, "killed": True, "pid": proc.pid}
+    finally:
+        _ACTIVE_PROCS.pop(token, None)
+
+
+def _is_cancelled(token: str | None) -> bool:
+    return bool(token) and token in _CANCELLED_TOKENS
+
+
+def _release_token(token: str | None) -> None:
+    """Limpa token de _CANCELLED_TOKENS no fim de cada generator."""
+    if token:
+        _CANCELLED_TOKENS.discard(token)
+
+
 async def _run_subproc_streaming(
-    cmd: list[str], label: str = ""
+    cmd: list[str], label: str = "", token: str | None = None
 ) -> AsyncGenerator[str, None]:
-    """Roda subprocess e faz yield de cada linha do stdout/stderr."""
+    """Roda subprocess e faz yield de cada linha do stdout/stderr.
+
+    Se `token` fornecido, registra Popen em `_ACTIVE_PROCS[token]` pra suportar
+    cancelamento via `cancel_token(token)`.
+    """
     if label:
         yield f"[{label}] iniciando: {' '.join(cmd[:3])}...\n"
 
@@ -61,6 +99,8 @@ async def _run_subproc_streaming(
                 stderr=subprocess.STDOUT,
                 env=env,
             )
+            if token:
+                _ACTIVE_PROCS[token] = proc
             for line in iter(proc.stdout.readline, b""):
                 # Tenta UTF-8 primeiro, fallback CP1252 (Windows default)
                 try:
@@ -76,6 +116,8 @@ async def _run_subproc_streaming(
         except Exception as e:
             q.put(f"[{label}] ERRO: {type(e).__name__}: {e}\n")
         finally:
+            if token:
+                _ACTIVE_PROCS.pop(token, None)
             q.put(None)
 
     t = threading.Thread(target=_run, daemon=True)
@@ -92,7 +134,7 @@ async def _run_subproc_streaming(
         yield line
 
 
-async def atualizar_agora() -> AsyncGenerator[str, None]:
+async def atualizar_agora(token: str | None = None) -> AsyncGenerator[str, None]:
     """Roda pipeline no M4 + scp downstream + sinaliza fim."""
     yield "Iniciando atualização — pipeline roda no M4 + sync downstream\n"
 
@@ -103,8 +145,12 @@ async def atualizar_agora() -> AsyncGenerator[str, None]:
         f"cd {M4_PIPELINE_CWD} && {M4_PYTHON} preparar_pajs.py",
     ]
     yield "\n=== FASE 1: pipeline no M4 ===\n"
-    async for linha in _run_subproc_streaming(cmd_ssh, label="M4"):
+    async for linha in _run_subproc_streaming(cmd_ssh, label="M4", token=token):
         yield linha
+    if _is_cancelled(token):
+        yield "\n=== CANCELADO PELO USUÁRIO (fase 1) ===\n"
+        _release_token(token)
+        return
 
     # 2. Sync estado (pequeno, rápido)
     yield "\n=== FASE 2: sync estado M4 → PC ===\n"
@@ -114,8 +160,12 @@ async def atualizar_agora() -> AsyncGenerator[str, None]:
         f"{M4_HOST}:{M4_STATE_DIR}/pajs_processados.json",
         os.path.join(_pc_state_dir(), "pajs_processados.json"),
     ]
-    async for linha in _run_subproc_streaming(cmd_scp_estado, label="scp-estado"):
+    async for linha in _run_subproc_streaming(cmd_scp_estado, label="scp-estado", token=token):
         yield linha
+    if _is_cancelled(token):
+        yield "\n=== CANCELADO PELO USUÁRIO (fase 2) ===\n"
+        _release_token(token)
+        return
 
     # 3. Sync pastas dos PAJs (pode ser grande — usar tar+ssh pra eficiência)
     yield "\n=== FASE 3: sync pastas PAJ M4 → PC ===\n"
@@ -129,9 +179,16 @@ async def atualizar_agora() -> AsyncGenerator[str, None]:
     ]
     yield f"[sync] baixando arquivo {tmp_tar}\n"
     with open(tmp_tar, "wb") as f:
-        proc = subprocess.run(cmd_tar, stdout=f, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(cmd_tar, stdout=f, stderr=subprocess.PIPE)
+        if token:
+            _ACTIVE_PROCS[token] = proc
+        try:
+            _, err = proc.communicate()
+        finally:
+            if token:
+                _ACTIVE_PROCS.pop(token, None)
     if proc.returncode != 0:
-        yield f"[sync] ERRO tar ssh: {proc.stderr.decode('utf-8', errors='replace')}\n"
+        yield f"[sync] ERRO tar ssh: {err.decode('utf-8', errors='replace')}\n"
         return
     yield f"[sync] tar baixado ({os.path.getsize(tmp_tar)} bytes), extraindo...\n"
     cmd_extract = [
@@ -141,17 +198,18 @@ async def atualizar_agora() -> AsyncGenerator[str, None]:
         "-C",
         r"E:\DPU\dpu-workspace\Entrada",
     ]
-    async for linha in _run_subproc_streaming(cmd_extract, label="extract"):
+    async for linha in _run_subproc_streaming(cmd_extract, label="extract", token=token):
         yield linha
     try:
         os.remove(tmp_tar)
     except Exception:
         pass
 
+    _release_token(token)
     yield "\n=== ATUALIZAÇÃO CONCLUÍDA ===\n"
 
 
-async def atualizar_apenas_estado() -> AsyncGenerator[str, None]:
+async def atualizar_apenas_estado(token: str | None = None) -> AsyncGenerator[str, None]:
     """Sync rápido — só estado/pajs_processados.json (sem rodar pipeline M4).
 
     Pro caso de JP já sabe que o cron rodou e só quer ver o estado novo.
@@ -163,12 +221,13 @@ async def atualizar_apenas_estado() -> AsyncGenerator[str, None]:
         f"{M4_HOST}:{M4_STATE_DIR}/pajs_processados.json",
         os.path.join(_pc_state_dir(), "pajs_processados.json"),
     ]
-    async for linha in _run_subproc_streaming(cmd, label="scp"):
+    async for linha in _run_subproc_streaming(cmd, label="scp", token=token):
         yield linha
+    _release_token(token)
     yield "Estado atualizado.\n"
 
 
-async def baixar_do_m4() -> AsyncGenerator[str, None]:
+async def baixar_do_m4(token: str | None = None) -> AsyncGenerator[str, None]:
     """Sync rápido: rsync M4→PC SEM rodar pipeline.
 
     Pega o estado + pastas que M4 já tem (mantido fresco pelo cron 4x/dia).
@@ -188,8 +247,12 @@ async def baixar_do_m4() -> AsyncGenerator[str, None]:
         f"{M4_HOST}:{M4_STATE_DIR}/pajs_processados.json",
         os.path.join(_pc_state_dir(), "pajs_processados.json"),
     ]
-    async for linha in _run_subproc_streaming(cmd_estado, label="scp-estado"):
+    async for linha in _run_subproc_streaming(cmd_estado, label="scp-estado", token=token):
         yield linha
+    if _is_cancelled(token):
+        yield "\n=== CANCELADO PELO USUÁRIO ===\n"
+        _release_token(token)
+        return
 
     # 2. Pastas dos PAJs (tar+ssh pra eficiência)
     yield "\n[2/2] Pastas dos PAJs (Entrada/dpuscript/)\n"
@@ -197,25 +260,33 @@ async def baixar_do_m4() -> AsyncGenerator[str, None]:
     tmp_tar = r"E:\DPU\dpu-workspace\Entrada\.sync_m4.tar.gz"
     cmd_tar = ["ssh", M4_HOST, f"cd {M4_DATA_DIR}/.. && tar -czf - dpuscript/"]
     yield f"[sync] baixando tarball\n"
-    proc = subprocess.run(cmd_tar, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(cmd_tar, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if token:
+        _ACTIVE_PROCS[token] = proc
+    try:
+        stdout_bytes, err = proc.communicate()
+    finally:
+        if token:
+            _ACTIVE_PROCS.pop(token, None)
     if proc.returncode != 0:
-        yield f"[sync] ERRO tar: {proc.stderr.decode('utf-8', errors='replace')}\n"
+        yield f"[sync] ERRO tar: {err.decode('utf-8', errors='replace')}\n"
         return
     with open(tmp_tar, "wb") as f:
-        f.write(proc.stdout)
+        f.write(stdout_bytes)
     yield f"[sync] tarball baixado ({os.path.getsize(tmp_tar)/1024:.0f} KB), extraindo...\n"
     cmd_extract = ["tar", "-xzf", tmp_tar, "-C", r"E:\DPU\dpu-workspace\Entrada"]
-    async for linha in _run_subproc_streaming(cmd_extract, label="extract"):
+    async for linha in _run_subproc_streaming(cmd_extract, label="extract", token=token):
         yield linha
     try:
         os.remove(tmp_tar)
     except Exception:
         pass
 
+    _release_token(token)
     yield "\n=== SYNC CONCLUÍDO (sem rodar pipeline) ===\n"
 
 
-async def reconciliar_apenas() -> AsyncGenerator[str, None]:
+async def reconciliar_apenas(token: str | None = None) -> AsyncGenerator[str, None]:
     """Reconciliação rápida — só compara caixa SISDPU real vs estado local
     e move PAJs concluídos pra dpuscript_arquivados/. NÃO baixa peças nem
     processa novos PAJs. Rápido: ~30-60s.
@@ -234,8 +305,9 @@ async def reconciliar_apenas() -> AsyncGenerator[str, None]:
         r"E:\DPU\dpu-workspace\dpuscript\preparar_pajs.py",
         "--reconciliar-apenas",
     ]
-    async for linha in _run_subproc_streaming(cmd, label="reconcilia"):
+    async for linha in _run_subproc_streaming(cmd, label="reconcilia", token=token):
         yield linha
+    _release_token(token)
     yield "\n=== RECONCILIAÇÃO CONCLUÍDA ===\n"
 
 
