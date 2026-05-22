@@ -28,6 +28,7 @@ from routes.feedback import router as feedback_router
 from routes.busca import router as busca_router
 from routes.planejar import router as planejar_router
 from routes.skills import router as skills_router, api_router as skills_api_router
+from routes.docgen import router as docgen_router
 
 BASE_DIR = Path(__file__).resolve().parent
 PID_FILE = BASE_DIR / ".server.pid"
@@ -55,6 +56,7 @@ app.include_router(busca_router)
 app.include_router(planejar_router)
 app.include_router(skills_router)
 app.include_router(skills_api_router)
+app.include_router(docgen_router)
 
 
 def _cleanup_port(port: int) -> None:

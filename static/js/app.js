@@ -129,6 +129,102 @@ function cancelarPipeline() {
     _pipelineToken = null;
 }
 
+/* Docgen — gerar DOCX/PDF a partir de .txt do PAJ */
+
+var _docgenPaj = null;
+var _docgenSource = null;
+
+async function abrirDocgenModal(pajNorm) {
+    _docgenPaj = pajNorm;
+    var modal = document.getElementById('docgen-modal');
+    if (!modal) return;
+
+    // Reset UI
+    document.getElementById('docgen-loading').style.display = '';
+    document.getElementById('docgen-form').style.display = 'none';
+    document.getElementById('docgen-log-box').style.display = 'none';
+    document.getElementById('docgen-log').textContent = '';
+    document.getElementById('docgen-arquivo').innerHTML = '<option value="">-- selecione --</option>';
+    document.getElementById('docgen-tipo').value = '';
+    document.getElementById('docgen-tribunal').value = '';
+    document.getElementById('docgen-btn-gerar').disabled = false;
+
+    modal.showModal();
+
+    try {
+        var resp = await fetch('/api/docgen/' + encodeURIComponent(pajNorm) + '/txts');
+        var data = await resp.json();
+        var sel = document.getElementById('docgen-arquivo');
+        var noTxts = document.getElementById('docgen-no-txts');
+
+        if (!data.txts || data.txts.length === 0) {
+            noTxts.style.display = '';
+        } else {
+            noTxts.style.display = 'none';
+            data.txts.forEach(function(t) {
+                var opt = document.createElement('option');
+                opt.value = t.nome;
+                opt.textContent = t.nome + ' (' + (t.tamanho / 1024).toFixed(1) + ' KB)';
+                sel.appendChild(opt);
+            });
+        }
+
+        document.getElementById('docgen-loading').style.display = 'none';
+        document.getElementById('docgen-form').style.display = '';
+    } catch (e) {
+        showToast('Erro ao listar arquivos: ' + e.message, 'error');
+    }
+}
+
+function executarDocgen() {
+    if (!_docgenPaj) return;
+    var arquivo = document.getElementById('docgen-arquivo').value;
+    var tipo = document.getElementById('docgen-tipo').value;
+    var tribunal = document.getElementById('docgen-tribunal').value;
+
+    if (!arquivo) { showToast('Selecione um arquivo .txt', 'warning'); return; }
+    if (!tipo) { showToast('Selecione tipo de peça', 'warning'); return; }
+
+    document.getElementById('docgen-btn-gerar').disabled = true;
+    var logBox = document.getElementById('docgen-log-box');
+    var logEl = document.getElementById('docgen-log');
+    var statusEl = document.getElementById('docgen-status');
+    logBox.style.display = '';
+    logEl.textContent = '';
+    statusEl.textContent = 'rodando';
+    statusEl.className = 'badge badge-sm badge-warning';
+
+    var token = _genToken();
+    var qs = '?arquivo=' + encodeURIComponent(arquivo) +
+             '&tipo_peca=' + encodeURIComponent(tipo) +
+             (tribunal ? '&tribunal=' + encodeURIComponent(tribunal) : '') +
+             '&token=' + token;
+
+    if (_docgenSource) { _docgenSource.close(); _docgenSource = null; }
+    _docgenSource = new EventSource('/api/docgen/' + encodeURIComponent(_docgenPaj) + '/gerar' + qs);
+
+    _docgenSource.addEventListener('log', function(e) {
+        logEl.textContent += e.data + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+    });
+
+    _docgenSource.addEventListener('done', function() {
+        statusEl.textContent = 'concluido';
+        statusEl.className = 'badge badge-sm badge-success';
+        document.getElementById('docgen-btn-gerar').disabled = false;
+        _docgenSource.close();
+        _docgenSource = null;
+        showToast('DOCX gerado — veja na pasta do PAJ', 'success');
+    });
+
+    _docgenSource.onerror = function() {
+        statusEl.textContent = 'erro';
+        statusEl.className = 'badge badge-sm badge-error';
+        document.getElementById('docgen-btn-gerar').disabled = false;
+        if (_docgenSource) { _docgenSource.close(); _docgenSource = null; }
+    };
+}
+
 /* Limpeza de anexos (modal — preview + execute) */
 
 var _limpezaPajAtual = null;
