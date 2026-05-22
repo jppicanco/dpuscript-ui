@@ -10,6 +10,7 @@ from sse_starlette.sse import EventSourceResponse
 from services.sync_service import (
     atualizar_agora,
     atualizar_apenas_estado,
+    baixar_do_m4,
     reconciliar_apenas,
 )
 
@@ -32,6 +33,15 @@ async def atualizar():
 async def estado():
     """Sync rápido só do estado (sem rodar pipeline M4)."""
     return EventSourceResponse(_stream(atualizar_apenas_estado()))
+
+
+@router.get("/baixar-do-m4")
+async def baixar():
+    """Sync rápido: rsync M4→PC sem rodar pipeline. ~30-60s.
+
+    Pega o que o cron M4 (4x/dia) já preparou. Para uso diário.
+    """
+    return EventSourceResponse(_stream(baixar_do_m4()))
 
 
 @router.get("/reconciliar")

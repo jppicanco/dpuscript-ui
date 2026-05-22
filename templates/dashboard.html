@@ -28,22 +28,26 @@
                 </span>
             </div>
         </div>
-        <div class="flex gap-2">
+        <div class="flex gap-2 items-center">
             <button class="btn btn-success btn-sm tooltip tooltip-left"
-                    data-tip="RAPIDO (~30-60s): só verifica caixa SISDPU e remove PAJs ja concluidos. NAO baixa pecas. Use sempre que concluir PAJ no SISDPU."
+                    data-tip="~30-60s. So verifica caixa SISDPU e remove PAJs ja concluidos. NAO baixa pecas. Use sempre que concluir PAJ no SISDPU."
                     onclick="runPipeline('/api/sync/reconciliar', 'Reconciliar caixa (rapido)')">
-                Reconciliar caixa (rápido)
+                Reconciliar caixa
             </button>
             <button class="btn btn-primary btn-sm tooltip tooltip-left"
-                    data-tip="COMPLETO (~5-20min): roda pipeline inteiro no M4 (baixa pecas TNU/STJ + OCR + classifica). Use 1x ao dia ou quando ha movimentacoes novas."
-                    onclick="runPipeline('/api/sync/atualizar', 'Atualizar tudo (M4)')">
-                Atualizar tudo
+                    data-tip="~30s. rsync M4 → PC sem rodar pipeline. M4 ja roda pipeline 4x/dia (8h15, 12h30, 17h30, 21h00). Pega o que ele ja preparou."
+                    onclick="runPipeline('/api/sync/baixar-do-m4', 'Baixar do M4')">
+                Baixar do M4
             </button>
-            <button class="btn btn-ghost btn-sm tooltip tooltip-left"
-                    data-tip="Legado: roda pipeline local no PC. Use so se M4 indisponivel."
-                    onclick="runPipeline('/api/pipeline/run', 'Sincronizar PAJs (local)')">
-                Local (fallback)
-            </button>
+            <details class="dropdown dropdown-end">
+                <summary class="btn btn-ghost btn-sm">⋯</summary>
+                <ul class="menu dropdown-content bg-base-200 rounded-box z-10 w-72 p-2 shadow-lg">
+                    <li><a class="tooltip tooltip-left" data-tip="~5-20min. Forca M4 rodar pipeline agora (fora do cron). Use quando precisa atualizado JA."
+                           onclick="runPipeline('/api/sync/atualizar', 'Forcar pipeline M4 agora')">Forçar pipeline M4 agora</a></li>
+                    <li><a class="tooltip tooltip-left" data-tip="~5-20min. Roda pipeline LOCAL no PC. Use SO se M4 indisponivel."
+                           onclick="runPipeline('/api/pipeline/run', 'Pipeline local (fallback)')">Local (fallback)</a></li>
+                </ul>
+            </details>
         </div>
     </div>
 

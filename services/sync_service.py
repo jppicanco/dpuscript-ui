@@ -166,6 +166,53 @@ async def atualizar_apenas_estado() -> AsyncGenerator[str, None]:
     yield "Estado atualizado.\n"
 
 
+async def baixar_do_m4() -> AsyncGenerator[str, None]:
+    """Sync rápido: rsync M4→PC SEM rodar pipeline.
+
+    Pega o estado + pastas que M4 já tem (mantido fresco pelo cron 4x/dia).
+    USE QUANDO: rotina diária. Cron M4 já fez trabalho pesado, JP só quer
+    ver dados frescos.
+
+    Diferente de "atualizar_agora" (que faz SSH + roda pipeline + sync).
+    Esse só faz sync.
+    """
+    yield "Sync M4 → PC (sem rodar pipeline — pega o que M4 já tem)\n\n"
+
+    # 1. Estado
+    yield "[1/2] Estado pajs_processados.json\n"
+    os.makedirs(_pc_state_dir(), exist_ok=True)
+    cmd_estado = [
+        "scp",
+        f"{M4_HOST}:{M4_STATE_DIR}/pajs_processados.json",
+        os.path.join(_pc_state_dir(), "pajs_processados.json"),
+    ]
+    async for linha in _run_subproc_streaming(cmd_estado, label="scp-estado"):
+        yield linha
+
+    # 2. Pastas dos PAJs (tar+ssh pra eficiência)
+    yield "\n[2/2] Pastas dos PAJs (Entrada/dpuscript/)\n"
+    os.makedirs(_pc_data_dir(), exist_ok=True)
+    tmp_tar = r"E:\DPU\dpu-workspace\Entrada\.sync_m4.tar.gz"
+    cmd_tar = ["ssh", M4_HOST, f"cd {M4_DATA_DIR}/.. && tar -czf - dpuscript/"]
+    yield f"[sync] baixando tarball\n"
+    proc = subprocess.run(cmd_tar, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        yield f"[sync] ERRO tar: {proc.stderr.decode('utf-8', errors='replace')}\n"
+        return
+    with open(tmp_tar, "wb") as f:
+        f.write(proc.stdout)
+    yield f"[sync] tarball baixado ({os.path.getsize(tmp_tar)/1024:.0f} KB), extraindo...\n"
+    cmd_extract = ["tar", "-xzf", tmp_tar, "-C", r"E:\DPU\dpu-workspace\Entrada"]
+    async for linha in _run_subproc_streaming(cmd_extract, label="extract"):
+        yield linha
+    try:
+        os.remove(tmp_tar)
+    except Exception:
+        pass
+
+    yield "\n=== SYNC CONCLUÍDO (sem rodar pipeline) ===\n"
+
+
 async def reconciliar_apenas() -> AsyncGenerator[str, None]:
     """Reconciliação rápida — só compara caixa SISDPU real vs estado local
     e move PAJs concluídos pra dpuscript_arquivados/. NÃO baixa peças nem
