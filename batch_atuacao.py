@@ -183,7 +183,9 @@ ALERTAS: <riscos, dúvidas ou pontos de atenção; ou n/a>
 def _env_para_claude(pasta: Path) -> dict:
     env = os.environ.copy()
     for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT",
-              "CLAUDE_PROJECT_DIR", "CLAUDE_AGENT_RUN_ID"):
+              "CLAUDE_PROJECT_DIR", "CLAUDE_AGENT_RUN_ID",
+              # NUNCA usar API paga — força OAuth (plano enterprise via claude login)
+              "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         env.pop(k, None)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
@@ -234,6 +236,24 @@ def parse_bloco(texto: str) -> dict:
     return campos
 
 
+_RATE_PATTERNS = (
+    "limitando temporariamente",
+    "rate limit", "rate_limit", "rate-limit",
+    "429", "too many requests", "overloaded", "quota",
+    "tente novamente", "try again later",
+)
+
+
+def _e_rate_limit(saida: str, returncode: int) -> bool:
+    """Detecta rate limit da Anthropic na saída do claude CLI."""
+    if returncode == 0:
+        # Mesmo com exit 0, claude pode retornar is_error com a msg no result
+        low = (saida or "").lower()
+        return any(p in low for p in _RATE_PATTERNS) and "is_error" in low
+    low = (saida or "").lower()
+    return any(p in low for p in _RATE_PATTERNS)
+
+
 def listar_pajs() -> list[str]:
     if not ENTRADA.exists():
         return []
@@ -276,37 +296,59 @@ def processar(paj: str) -> dict:
         "--permission-mode", "bypassPermissions",
     ]
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=TIMEOUT_SEG,
-            cwd=str(WORKSPACE),
-            env=_env_para_claude(pasta),
-        )
-    except subprocess.TimeoutExpired:
-        log(f"[{paj}] TIMEOUT ({TIMEOUT_SEG}s)")
-        atualizar_status(paj, status="timeout")
-        _escrever_resultado(paj, pasta, status="timeout", summary="(timeout)", bloco={})
-        return {"paj": paj, "status": "timeout"}
-    except Exception as e:
-        log(f"[{paj}] ERRO subprocess: {type(e).__name__}: {e}")
-        atualizar_status(paj, status="erro", erro=str(e))
-        return {"paj": paj, "status": "erro", "erro": str(e)}
+    # Retry com backoff exponencial pra rate limit da Anthropic.
+    # Backoffs em segundos; len = nº de tentativas extras.
+    backoffs = [45, 90, 180, 300]
+    proc = None
+    result_text = ""
+    for tentativa in range(len(backoffs) + 1):
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=TIMEOUT_SEG,
+                cwd=str(WORKSPACE),
+                env=_env_para_claude(pasta),
+            )
+        except subprocess.TimeoutExpired:
+            log(f"[{paj}] TIMEOUT ({TIMEOUT_SEG}s)")
+            atualizar_status(paj, status="timeout")
+            _escrever_resultado(paj, pasta, status="timeout", summary="(timeout)", bloco={})
+            return {"paj": paj, "status": "timeout"}
+        except Exception as e:
+            log(f"[{paj}] ERRO subprocess: {type(e).__name__}: {e}")
+            atualizar_status(paj, status="erro", erro=str(e))
+            return {"paj": paj, "status": "erro", "erro": str(e)}
+
+        saida = (proc.stdout or "") + " " + (proc.stderr or "")
+        if _e_rate_limit(saida, proc.returncode):
+            if tentativa < len(backoffs):
+                espera = backoffs[tentativa]
+                log(f"[{paj}] rate limit — aguardando {espera}s (tentativa {tentativa + 1}/{len(backoffs)})")
+                atualizar_status(paj, status="rate_limit_retry", tentativa=tentativa + 1)
+                import time as _t
+                _t.sleep(espera)
+                continue
+            else:
+                log(f"[{paj}] rate limit persistente após {len(backoffs)} tentativas — desisto")
+                atualizar_status(paj, status="rate_limit")
+                _escrever_resultado(paj, pasta, status="erro",
+                                    summary="rate limit persistente (Anthropic)", bloco={})
+                return {"paj": paj, "status": "rate_limit"}
+        break  # não é rate limit — sai do loop de retry
 
     if proc.returncode != 0:
-        log(f"[{paj}] exit {proc.returncode}: {proc.stderr[-300:]}")
+        log(f"[{paj}] exit {proc.returncode}: {(proc.stderr or proc.stdout)[-300:]}")
         atualizar_status(paj, status="erro", erro=f"exit {proc.returncode}")
         _escrever_resultado(paj, pasta, status="erro",
-                            summary=f"exit {proc.returncode}: {proc.stderr[-500:]}", bloco={})
+                            summary=f"exit {proc.returncode}: {(proc.stderr or proc.stdout)[-500:]}", bloco={})
         return {"paj": paj, "status": "erro"}
 
     # output-format json → wrapper {"result": "<texto final>", ...}
-    result_text = ""
     try:
         wrapper = json.loads(proc.stdout.strip())
         result_text = wrapper.get("result", "") if isinstance(wrapper, dict) else ""

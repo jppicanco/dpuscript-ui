@@ -11,3 +11,5 @@ build/
 batch_atuacao.log
 batch_run_stdout.log
 batch_status.json
+watchdog.log
+watchdog_stdout.log
