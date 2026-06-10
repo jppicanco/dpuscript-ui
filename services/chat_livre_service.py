@@ -418,6 +418,14 @@ class ChatLivreSession:
             "--include-partial-messages",
             "--permission-mode", "bypassPermissions",
         ]
+        # Remove env vars de sessao Claude pai pra evitar
+        # "Claude Code cannot be launched inside another Claude Code session".
+        # Acontece quando dpuscript-ui e' iniciado de dentro do `claude` CLI.
+        import os as _os
+        env = _os.environ.copy()
+        for k in ("CLAUDECODE", "CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_ENTRYPOINT",
+                  "CLAUDE_PROJECT_DIR", "CLAUDE_AGENT_RUN_ID"):
+            env.pop(k, None)
         try:
             self.proc = subprocess.Popen(
                 cmd,
@@ -425,10 +433,14 @@ class ChatLivreSession:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=str(OFICIO_GERAL),
+                env=env,
             )
             self._alive = True
             self._reader_thread = threading.Thread(target=self._read_output, daemon=True)
             self._reader_thread.start()
+            # Drena stderr em thread separada pra evitar buffer cheio bloquear subprocess
+            self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
+            self._stderr_thread.start()
             return True
         except FileNotFoundError:
             self.status = "error"
@@ -507,6 +519,21 @@ class ChatLivreSession:
             self.error = "Subprocess Claude morreu."
             self.output_queue.put({"type": "error", "text": self.error})
 
+    def _read_stderr(self) -> None:
+        """Drena stderr do subprocess Claude pra evitar buffer cheio.
+        Linhas significativas (Error/refuse) viram evento error pro user.
+        """
+        try:
+            for line in iter(self.proc.stderr.readline, b""):
+                text = line.decode("utf-8", errors="replace").strip()
+                if not text:
+                    continue
+                low = text.lower()
+                if "error" in low or "refuse" in low or "cannot" in low:
+                    self.output_queue.put({"type": "error", "text": f"[claude stderr] {text}"})
+        except Exception:
+            pass
+
     def _read_output(self) -> None:
         try:
             for line in iter(self.proc.stdout.readline, b""):
@@ -554,7 +581,25 @@ class ChatLivreSession:
                     return {"type": "tool", "text": f"[{tool_name}]"}
             return None
 
+        # Fallback: capturar texto via `assistant` events quando stream_event
+        # nao traz deltas (CLI pode emitir mensagem inteira via type=assistant)
+        if etype == "assistant":
+            msg = event.get("message", {})
+            content = msg.get("content", []) or []
+            buf = ""
+            for c in content:
+                if isinstance(c, dict) and c.get("type") == "text":
+                    buf += c.get("text", "")
+            if buf and buf not in self.accumulated_text:
+                self.accumulated_text += buf
+                return {"type": "text", "text": buf}
+            return None
+
         if etype == "result":
+            # Se o CLI reportou erro como `result.result`, expor pro user
+            raw_result = event.get("result", "") or ""
+            if not self.accumulated_text.strip() and raw_result:
+                self.output_queue.put({"type": "error", "text": raw_result})
             if self.accumulated_text.strip():
                 _adicionar_mensagem(
                     self.paj_norm, self.conv_id, "assistant", self.accumulated_text
