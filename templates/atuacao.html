@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}Central de Atuação{% endblock %}
+
+{% block content %}
+<div x-data="atuacaoApp()" x-init="init()">
+
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+        <div>
+            <h2 class="text-2xl font-bold">Central de Atuação</h2>
+            <p class="text-sm text-base-content/60 mt-1">
+                Tudo preparado para você revisar e protocolar. Nada foi protocolado nem movimentado no SISDPU.
+            </p>
+        </div>
+        <button class="btn btn-sm btn-ghost" @click="carregar()">
+            <span x-show="!carregando">↻ Atualizar</span>
+            <span x-show="carregando" class="loading loading-spinner loading-xs"></span>
+        </button>
+    </div>
+
+    <!-- Resumo / stats -->
+    <div class="flex flex-wrap gap-2 mb-4">
+        <div class="badge badge-lg badge-neutral">Total: <span class="ml-1 font-bold" x-text="resumo.total || 0"></span></div>
+        <div class="badge badge-lg badge-success" x-show="(resumo.por_status && resumo.por_status.done) || 0">
+            Prontos: <span class="ml-1 font-bold" x-text="(resumo.por_status && resumo.por_status.done) || 0"></span>
+        </div>
+        <div class="badge badge-lg badge-warning" x-show="pendentes > 0">
+            Pendentes: <span class="ml-1 font-bold" x-text="pendentes"></span>
+        </div>
+        <div class="badge badge-lg badge-error" x-show="(resumo.por_status && (resumo.por_status.erro||resumo.por_status.timeout)) || 0">
+            Falhas: <span class="ml-1 font-bold" x-text="((resumo.por_status&&resumo.por_status.erro)||0)+((resumo.por_status&&resumo.por_status.timeout)||0)"></span>
+        </div>
+        <div class="divider divider-horizontal mx-0"></div>
+        <div class="badge badge-lg" style="background:#7f1d1d;color:#fff" x-show="(resumo.por_tipo && resumo.por_tipo.RECURSO) || 0">
+            Recursos: <span class="ml-1 font-bold" x-text="(resumo.por_tipo && resumo.por_tipo.RECURSO) || 0"></span>
+        </div>
+        <div class="badge badge-lg badge-info" x-show="(resumo.por_tipo && resumo.por_tipo.DESPACHO) || 0">
+            Despachos: <span class="ml-1 font-bold" x-text="(resumo.por_tipo && resumo.por_tipo.DESPACHO) || 0"></span>
+        </div>
+        <div class="badge badge-lg badge-ghost" x-show="(resumo.por_tipo && resumo.por_tipo.ARQUIVAMENTO) || 0">
+            Arquivamentos: <span class="ml-1 font-bold" x-text="(resumo.por_tipo && resumo.por_tipo.ARQUIVAMENTO) || 0"></span>
+        </div>
+    </div>
+
+    <!-- Filtros -->
+    <div class="flex flex-wrap gap-2 mb-4">
+        <select class="select select-bordered select-sm" x-model="filtroTipo">
+            <option value="">Todos os tipos</option>
+            <option value="RECURSO">Recurso</option>
+            <option value="DESPACHO">Despacho/Ciência</option>
+            <option value="ARQUIVAMENTO">Arquivamento</option>
+            <option value="NAO_ATUAR">Não atuar</option>
+        </select>
+        <select class="select select-bordered select-sm" x-model="filtroStatus">
+            <option value="">Todos os status</option>
+            <option value="done">Pronto</option>
+            <option value="pendente">Pendente</option>
+            <option value="erro">Erro</option>
+            <option value="timeout">Timeout</option>
+        </select>
+        <input class="input input-bordered input-sm flex-1 min-w-48"
+               placeholder="Buscar assistido / PAJ / resumo..."
+               x-model="busca">
+        <label class="label cursor-pointer gap-2">
+            <input type="checkbox" class="checkbox checkbox-sm" x-model="soComPrazo">
+            <span class="label-text text-sm">Só com prazo</span>
+        </label>
+    </div>
+
+    <!-- Lista -->
+    <div class="space-y-3">
+        <template x-for="a in filtrados" :key="a.paj_norm">
+            <div class="card bg-base-200 shadow-sm border-l-4"
+                 :style="'border-left-color:' + corTipo(a.tipo)">
+                <div class="card-body p-4">
+
+                    <!-- Linha topo -->
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="badge badge-sm font-semibold"
+                              :style="'background:'+corTipo(a.tipo)+';color:#fff'"
+                              x-text="rotuloTipo(a.tipo) || statusLabel(a.atuacao_status)"></span>
+                        <a class="font-mono font-bold link link-hover" :href="'/paj/'+a.paj_norm" x-text="a.paj"></a>
+                        <span class="badge badge-ghost badge-xs" x-text="a.foro"></span>
+                        <span class="text-sm text-base-content/80" x-text="a.assistido"></span>
+                        <span class="ml-auto flex items-center gap-2">
+                            <span x-show="a.prazo && a.prazo !== 'n/a'"
+                                  class="badge badge-sm badge-warning" x-text="'prazo: '+a.prazo"></span>
+                            <span x-show="a.confianca" class="badge badge-xs badge-outline"
+                                  x-text="'confiança: '+a.confianca"></span>
+                            <span x-show="a.atuacao_status==='pendente'" class="badge badge-sm badge-ghost">não analisado</span>
+                            <span x-show="a.atuacao_status==='erro'" class="badge badge-sm badge-error">erro</span>
+                            <span x-show="a.atuacao_status==='timeout'" class="badge badge-sm badge-error">timeout</span>
+                        </span>
+                    </div>
+
+                    <!-- Resumo -->
+                    <div x-show="a.resumo" class="mt-1">
+                        <span class="text-xs uppercase text-base-content/50 font-semibold">O que é</span>
+                        <p class="text-sm" x-text="a.resumo"></p>
+                    </div>
+
+                    <!-- O que fazer -->
+                    <div x-show="a.o_que_fazer" class="mt-1 p-2 rounded bg-primary/10 border border-primary/20">
+                        <span class="text-xs uppercase text-primary font-semibold">O que fazer</span>
+                        <p class="text-sm font-medium" x-text="a.o_que_fazer"></p>
+                    </div>
+
+                    <!-- Alertas -->
+                    <div x-show="a.alertas && a.alertas !== 'n/a'" class="mt-1 p-2 rounded bg-warning/10 border border-warning/20">
+                        <span class="text-xs uppercase text-warning font-semibold">⚠ Atenção</span>
+                        <p class="text-sm" x-text="a.alertas"></p>
+                    </div>
+
+                    <!-- Movimentação (copiar) -->
+                    <div x-show="a.movimentacao" class="mt-1">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs uppercase text-base-content/50 font-semibold">Movimentação p/ SISDPU</span>
+                            <button class="btn btn-xs btn-ghost" @click="copiar(a.movimentacao, $event)">📋 copiar</button>
+                        </div>
+                        <pre class="text-xs bg-base-300 rounded p-2 whitespace-pre-wrap mt-1 max-h-40 overflow-y-auto" x-text="a.movimentacao"></pre>
+                    </div>
+
+                    <!-- Arquivos (peça) -->
+                    <div x-show="a.arquivos && a.arquivos.length" class="mt-1 flex flex-wrap gap-2 items-center">
+                        <span class="text-xs uppercase text-base-content/50 font-semibold">Peça/arquivos:</span>
+                        <template x-for="f in a.arquivos" :key="f.nome">
+                            <a class="badge badge-outline badge-sm gap-1 hover:bg-base-300"
+                               :href="'/files/'+a.paj_norm+'/'+f.nome" target="_blank">
+                                <span x-text="f.ext.toUpperCase()"></span>
+                                <span class="opacity-70" x-text="f.nome.length>32 ? f.nome.slice(0,32)+'…' : f.nome"></span>
+                            </a>
+                        </template>
+                    </div>
+
+                    <!-- Ações -->
+                    <div class="card-actions justify-end mt-1">
+                        <a class="btn btn-xs btn-ghost" :href="'/paj/'+a.paj_norm">Abrir PAJ</a>
+                        <button class="btn btn-xs btn-ghost" @click="discutir(a.paj_norm)">Discutir</button>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <div x-show="!filtrados.length && !carregando" class="alert">
+            <span>Nenhum PAJ com esse filtro.</span>
+        </div>
+    </div>
+</div>
+
+<script>
+function atuacaoApp() {
+    return {
+        atuacoes: [],
+        resumo: {},
+        carregando: false,
+        filtroTipo: '',
+        filtroStatus: '',
+        busca: '',
+        soComPrazo: false,
+
+        async init() { await this.carregar(); setInterval(() => this.carregar(true), 30000); },
+
+        async carregar(silencioso) {
+            if (!silencioso) this.carregando = true;
+            try {
+                const r = await fetch('/api/atuacao');
+                const d = await r.json();
+                this.atuacoes = d.atuacoes || [];
+                this.resumo = d.resumo || {};
+            } catch (e) {
+                if (!silencioso) showToast('Erro: ' + e.message, 'error');
+            } finally {
+                this.carregando = false;
+            }
+        },
+
+        get pendentes() {
+            const ps = this.resumo.por_status || {};
+            return ps.pendente || 0;
+        },
+
+        get filtrados() {
+            let l = this.atuacoes;
+            if (this.filtroTipo) l = l.filter(a => a.tipo === this.filtroTipo);
+            if (this.filtroStatus) l = l.filter(a => a.atuacao_status === this.filtroStatus);
+            if (this.soComPrazo) l = l.filter(a => a.prazo && a.prazo !== 'n/a' && a.prazo !== '');
+            if (this.busca) {
+                const q = this.busca.toLowerCase();
+                l = l.filter(a =>
+                    (a.assistido||'').toLowerCase().includes(q) ||
+                    (a.paj||'').toLowerCase().includes(q) ||
+                    (a.resumo||'').toLowerCase().includes(q));
+            }
+            // ordena: recursos primeiro, depois com prazo, depois resto
+            const peso = t => t === 'RECURSO' ? 0 : t === 'ARQUIVAMENTO' ? 1 : t === 'DESPACHO' ? 2 : 3;
+            return [...l].sort((a, b) => {
+                const pa = peso(a.tipo), pb = peso(b.tipo);
+                if (pa !== pb) return pa - pb;
+                return (b.prazo||'').localeCompare(a.prazo||'');
+            });
+        },
+
+        corTipo(t) {
+            return {RECURSO:'#7f1d1d', ARQUIVAMENTO:'#6b7280', DESPACHO:'#1d4ed8', NAO_ATUAR:'#9ca3af'}[t] || '#9ca3af';
+        },
+        rotuloTipo(t) {
+            return {RECURSO:'RECURSO', ARQUIVAMENTO:'ARQUIVAMENTO', DESPACHO:'DESPACHO', NAO_ATUAR:'NÃO ATUAR'}[t] || '';
+        },
+        statusLabel(s) {
+            return {pendente:'PENDENTE', erro:'ERRO', timeout:'TIMEOUT', rodando:'ANALISANDO'}[s] || '';
+        },
+
+        copiar(txt, ev) {
+            navigator.clipboard.writeText(txt).then(() => {
+                showToast('Movimentação copiada', 'success');
+                if (ev && ev.target) { const o = ev.target.textContent; ev.target.textContent='✓ copiado'; setTimeout(()=>ev.target.textContent=o, 1500); }
+            });
+        },
+
+        async discutir(pajNorm) { await abrirChatLivre(pajNorm); },
+    };
+}
+</script>
+{% endblock %}

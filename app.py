@@ -30,6 +30,7 @@ from routes.planejar import router as planejar_router
 from routes.skills import router as skills_router, api_router as skills_api_router
 from routes.docgen import router as docgen_router
 from routes.chat_livre import router as chat_livre_router
+from routes.atuacao import router as atuacao_router, api as atuacao_api
 
 BASE_DIR = Path(__file__).resolve().parent
 PID_FILE = BASE_DIR / ".server.pid"
@@ -59,6 +60,8 @@ app.include_router(skills_router)
 app.include_router(skills_api_router)
 app.include_router(docgen_router)
 app.include_router(chat_livre_router)
+app.include_router(atuacao_router)
+app.include_router(atuacao_api)
 
 
 def _cleanup_port(port: int) -> None:
