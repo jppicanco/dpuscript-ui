@@ -256,6 +256,23 @@ DECISAO_SCHEMA = {
 }
 
 
+CONFIG_LIMPO = Path(os.getenv("TEMP", r"C:\Users\JP\AppData\Local\Temp")) / "dpu_clean_cfg"
+_HOME_CRED = Path.home() / ".claude" / ".credentials.json"
+
+
+def _setup_config_limpo() -> None:
+    """Cria um CLAUDE_CONFIG_DIR limpo com SÓ a credencial (auth), sem plugins,
+    hooks (claude-mem/caveman) nem CLAUDE.md global. Isso elimina ~30-40k tokens
+    de contexto por chamada — o real culpado do estouro de cota (rate limit conta
+    tokens, e os hooks de SessionStart injetavam memória em toda chamada fria)."""
+    CONFIG_LIMPO.mkdir(parents=True, exist_ok=True)
+    if _HOME_CRED.exists():
+        try:
+            _shutil.copy2(_HOME_CRED, CONFIG_LIMPO / ".credentials.json")
+        except Exception:
+            pass
+
+
 def _env(pasta: Path) -> dict:
     env = os.environ.copy()
     for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT",
@@ -264,6 +281,7 @@ def _env(pasta: Path) -> dict:
         env.pop(k, None)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    env["CLAUDE_CONFIG_DIR"] = str(CONFIG_LIMPO)  # config limpa: sem plugins/hooks
     env["FORMATAR_PECA_SAIDA_DIR"] = str(pasta)
     env["FORMATAR_PECA_TEMPLATE"] = TEMPLATE_DOCX
     return env
@@ -302,12 +320,14 @@ def _claude_json(prompt: str, pasta: Path, schema: dict, timeout: int) -> tuple[
     reaproveita o cache do system base (barato).
     """
     CWD_LIMPO.mkdir(parents=True, exist_ok=True)
+    _setup_config_limpo()
     cmd = [
         CLAUDE_CMD, "--print", "--model", "opus",
         "--output-format", "json",
         "--json-schema", json.dumps(schema),
-        "--strict-mcp-config",
-        "--setting-sources", "user",
+        "--strict-mcp-config",          # sem MCP servers
+        "--setting-sources", "project",  # não carrega settings/plugins do usuário
+        "--tools", "",                  # decisão não usa ferramenta (corta defs built-in)
         "--append-system-prompt",
         "Você é executor de tarefa estruturada. Responda só o JSON do schema, sem markdown.",
     ]
@@ -347,7 +367,18 @@ def _claude_json(prompt: str, pasta: Path, schema: dict, timeout: int) -> tuple[
     return {}, {}, "rate_limit"
 
 
+MAX_TOKENS_RUN = int(os.getenv("BATCH_MAX_TOKENS", "1500000"))  # teto de tokens/run (folga p/ correções)
+
+
 def decidir(paj: str) -> dict:
+    # Trava de orçamento: se já consumimos o teto de tokens nesta execução,
+    # para de processar (deixa folga de cota pras correções do JP + recursos).
+    with _acc_lock:
+        consumido = (_acumulado["input"] + _acumulado["output"]
+                     + _acumulado["cache_read"] + _acumulado["cache_creation"])
+    if consumido >= MAX_TOKENS_RUN:
+        return {"paj": paj, "status": "pulado_budget"}
+
     pasta = ENTRADA / paj
     t0 = dt.datetime.now()
     _salvar_status(paj, status="decidindo", inicio=t0.isoformat(timespec="seconds"))
