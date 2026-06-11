@@ -20,7 +20,11 @@ from config import ARQUIVADOS_DIR, DPUSCRIPT_DIR, ENTRADA_DIR, SKILLS_DIR
 
 
 SCRIPT_FORMATAR = SKILLS_DIR / "_shared" / "formatacao-docx" / "formatar_peca.py"
-PYTHON_WORKSPACE = DPUSCRIPT_DIR / ".venv" / "Scripts" / "python.exe"
+import shutil as _shutil
+_py_ws = (_shutil.which("python", path=str(DPUSCRIPT_DIR / ".venv" / "Scripts")) or
+          _shutil.which("python", path=str(DPUSCRIPT_DIR / ".venv" / "bin")) or
+          "python")
+PYTHON_WORKSPACE = Path(_py_ws)
 
 TIPOS_PECA_VALIDOS = ("agravo", "embargos", "memoriais", "despacho")
 

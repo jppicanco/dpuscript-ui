@@ -98,7 +98,13 @@ def _kill_pid_file() -> None:
     try:
         old_pid = int(PID_FILE.read_text().strip())
         if old_pid != os.getpid():
-            subprocess.run(["taskkill", "/F", "/PID", str(old_pid)], capture_output=True)
+            if os.name == "nt":
+
+                subprocess.run(["taskkill", "/F", "/PID", str(old_pid)], capture_output=True)
+
+            else:
+
+                subprocess.run(["kill", str(old_pid)], capture_output=True)
             print(f"[app] killed previous server PID {old_pid}")
     except (ValueError, FileNotFoundError):
         pass
@@ -117,7 +123,7 @@ if __name__ == "__main__":
     PID_FILE.write_text(str(os.getpid()))
     print(f"[app] servidor PID={os.getpid()} — http://127.0.0.1:{PORT}")
     try:
-        uvicorn.run(app, host="127.0.0.1", port=PORT, reload=False)
+        uvicorn.run(app, host=os.getenv("HOST", "0.0.0.0"), port=PORT, reload=False)
     finally:
         try:
             PID_FILE.unlink(missing_ok=True)

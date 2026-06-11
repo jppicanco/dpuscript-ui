@@ -21,6 +21,11 @@ import threading
 import time
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
+import platform
+import sys
+
+# True quando rodando direto no M4 (workspace já é local — sem SSH/scp)
+IS_M4 = platform.system() == "Darwin" or bool(os.getenv("DPU_IS_M4"))
 
 M4_HOST = "macmini@192.168.0.102"
 M4_PIPELINE_CWD = "/Users/macmini/dpu-workspace/dpuscript"
@@ -135,49 +140,52 @@ async def _run_subproc_streaming(
 
 
 async def atualizar_agora(token: str | None = None) -> AsyncGenerator[str, None]:
-    """Roda pipeline no M4 + scp downstream + sinaliza fim."""
-    yield "Iniciando atualização — pipeline roda no M4 + sync downstream\n"
+    """Roda pipeline + decisão Grok e sinaliza fim.
 
-    # 1. SSH M4 chama pipeline (sem --full-prompt-max — modo lazy)
-    cmd_ssh = [
-        "ssh",
-        M4_HOST,
-        f"cd {M4_PIPELINE_CWD} && {M4_PYTHON} preparar_pajs.py",
-    ]
+    No M4: executa preparar_pajs.py + decidir_grok.py --prod localmente.
+    No Windows: SSH M4 pipeline + scp downstream (comportamento original).
+    """
+    if IS_M4:
+        yield "=== FASE 1: baixando PAJs do e-Proc/SISDPU ===\n"
+        cmd_prep = [sys.executable, "-X", "utf8",
+                    str(Path(M4_PIPELINE_CWD) / "preparar_pajs.py")]
+        async for linha in _run_subproc_streaming(cmd_prep, label="preparar", token=token):
+            yield linha
+        if _is_cancelled(token):
+            yield "\n=== CANCELADO ===\n"; _release_token(token); return
+
+        yield "\n=== FASE 2: analisando novos PAJs (Grok) ===\n"
+        cmd_grok = [sys.executable, "-X", "utf8",
+                    str(Path(M4_PIPELINE_CWD) / "decidir_grok.py"), "--prod"]
+        async for linha in _run_subproc_streaming(cmd_grok, label="grok", token=token):
+            yield linha
+        _release_token(token)
+        yield "\n=== ATUALIZAÇÃO CONCLUÍDA ===\n"
+        return
+
+    # --- Windows: comportamento original ---
+    yield "Iniciando atualização — pipeline roda no M4 + sync downstream\n"
+    cmd_ssh = ["ssh", M4_HOST, f"cd {M4_PIPELINE_CWD} && {M4_PYTHON} preparar_pajs.py"]
     yield "\n=== FASE 1: pipeline no M4 ===\n"
     async for linha in _run_subproc_streaming(cmd_ssh, label="M4", token=token):
         yield linha
     if _is_cancelled(token):
-        yield "\n=== CANCELADO PELO USUÁRIO (fase 1) ===\n"
-        _release_token(token)
-        return
+        yield "\n=== CANCELADO PELO USUÁRIO (fase 1) ===\n"; _release_token(token); return
 
-    # 2. Sync estado (pequeno, rápido)
     yield "\n=== FASE 2: sync estado M4 → PC ===\n"
     os.makedirs(_pc_state_dir(), exist_ok=True)
-    cmd_scp_estado = [
-        "scp",
-        f"{M4_HOST}:{M4_STATE_DIR}/pajs_processados.json",
-        os.path.join(_pc_state_dir(), "pajs_processados.json"),
-    ]
+    cmd_scp_estado = ["scp", f"{M4_HOST}:{M4_STATE_DIR}/pajs_processados.json",
+                      os.path.join(_pc_state_dir(), "pajs_processados.json")]
     async for linha in _run_subproc_streaming(cmd_scp_estado, label="scp-estado", token=token):
         yield linha
     if _is_cancelled(token):
-        yield "\n=== CANCELADO PELO USUÁRIO (fase 2) ===\n"
-        _release_token(token)
-        return
+        yield "\n=== CANCELADO PELO USUÁRIO (fase 2) ===\n"; _release_token(token); return
 
-    # 3. Sync pastas dos PAJs (pode ser grande — usar tar+ssh pra eficiência)
     yield "\n=== FASE 3: sync pastas PAJ M4 → PC ===\n"
     os.makedirs(_pc_data_dir(), exist_ok=True)
-    # tar via ssh pra um arquivo temp, depois extrai no PC
     tmp_tar = r"E:\DPU\dpu-workspace\Entrada\.sync_m4.tar.gz"
-    cmd_tar = [
-        "ssh",
-        M4_HOST,
-        f"cd {M4_DATA_DIR}/.. && tar -czf - dpuscript/",
-    ]
-    yield f"[sync] baixando arquivo {tmp_tar}\n"
+    cmd_tar = ["ssh", M4_HOST, f"cd {M4_DATA_DIR}/.. && tar -czf - dpuscript/"]
+    yield "[sync] baixando tarball\n"
     with open(tmp_tar, "wb") as f:
         proc = subprocess.Popen(cmd_tar, stdout=f, stderr=subprocess.PIPE)
         if token:
@@ -188,23 +196,16 @@ async def atualizar_agora(token: str | None = None) -> AsyncGenerator[str, None]
             if token:
                 _ACTIVE_PROCS.pop(token, None)
     if proc.returncode != 0:
-        yield f"[sync] ERRO tar ssh: {err.decode('utf-8', errors='replace')}\n"
-        return
+        yield f"[sync] ERRO tar ssh: {err.decode('utf-8', errors='replace')}\n"; return
     yield f"[sync] tar baixado ({os.path.getsize(tmp_tar)} bytes), extraindo...\n"
-    cmd_extract = [
-        "tar",
-        "-xzf",
-        tmp_tar,
-        "-C",
-        r"E:\DPU\dpu-workspace\Entrada",
-    ]
-    async for linha in _run_subproc_streaming(cmd_extract, label="extract", token=token):
+    async for linha in _run_subproc_streaming(
+            ["tar", "-xzf", tmp_tar, "-C", r"E:\DPU\dpu-workspace\Entrada"],
+            label="extract", token=token):
         yield linha
     try:
         os.remove(tmp_tar)
     except Exception:
         pass
-
     _release_token(token)
     yield "\n=== ATUALIZAÇÃO CONCLUÍDA ===\n"
 
@@ -298,13 +299,13 @@ async def reconciliar_apenas(token: str | None = None) -> AsyncGenerator[str, No
     yield "(NÃO baixa peças. Só move PAJs concluídos pra arquivados.)\n\n"
     # IMPORTANTE: usar venv do dpu-workspace (tem fitz/playwright/etc),
     # não o do dpuscript-ui (sem essas deps).
-    python_dpu_workspace = r"E:\DPU\dpu-workspace\dpuscript\.venv\Scripts\python.exe"
-    cmd = [
-        python_dpu_workspace,
-        "-X", "utf8",
-        r"E:\DPU\dpu-workspace\dpuscript\preparar_pajs.py",
-        "--reconciliar-apenas",
-    ]
+    if IS_M4:
+        cmd = [sys.executable, "-X", "utf8",
+               str(Path(M4_PIPELINE_CWD) / "preparar_pajs.py"), "--reconciliar-apenas"]
+    else:
+        python_dpu_workspace = r"E:\DPU\dpu-workspace\dpuscript\.venv\Scripts\python.exe"
+        cmd = [python_dpu_workspace, "-X", "utf8",
+               r"E:\DPU\dpu-workspace\dpuscript\preparar_pajs.py", "--reconciliar-apenas"]
     async for linha in _run_subproc_streaming(cmd, label="reconcilia", token=token):
         yield linha
     _release_token(token)
@@ -348,11 +349,28 @@ def _fmt_age(seconds: float | None) -> str:
 
 
 def _m4_last_cron_run() -> dict[str, object]:
-    """Pega timestamp do último 'FIM:' marker no log M4 via SSH (timeout 4s)."""
+    """Pega timestamp do último cron run.
+
+    No M4: lê log local diretamente.
+    No Windows: SSH para M4.
+    """
+    if IS_M4:
+        log_path = Path(_M4_LOG)
+        try:
+            if not log_path.exists():
+                return {"reachable": True, "error": "log não encontrado"}
+            mtime_epoch = log_path.stat().st_mtime
+            last_fim = ""
+            for line in reversed(log_path.read_text(errors="replace").splitlines()):
+                if "FIM:" in line:
+                    last_fim = line
+                    break
+            return {"reachable": True, "log_mtime_epoch": mtime_epoch, "last_fim_line": last_fim}
+        except Exception as e:
+            return {"reachable": False, "error": str(e)}
+
     cmd = [
-        "ssh",
-        "-o", "ConnectTimeout=3",
-        "-o", "BatchMode=yes",
+        "ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes",
         M4_HOST,
         f"stat -f '%m' {_M4_LOG} 2>/dev/null && grep -E 'FIM: ' {_M4_LOG} | tail -1",
     ]
@@ -363,11 +381,7 @@ def _m4_last_cron_run() -> dict[str, object]:
             return {"reachable": False, "error": proc.stderr.decode("utf-8", errors="replace")[:200]}
         mtime_epoch = float(out[0])
         last_fim = out[1] if len(out) > 1 else ""
-        return {
-            "reachable": True,
-            "log_mtime_epoch": mtime_epoch,
-            "last_fim_line": last_fim,
-        }
+        return {"reachable": True, "log_mtime_epoch": mtime_epoch, "last_fim_line": last_fim}
     except subprocess.TimeoutExpired:
         return {"reachable": False, "error": "ssh timeout"}
     except Exception as e:
