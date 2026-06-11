@@ -43,6 +43,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from claude_runner import run_claude, reap_orphans
+
 WORKSPACE = Path(os.getenv("DPU_WORKSPACE", r"E:\DPU\dpu-workspace"))
 ENTRADA = WORKSPACE / "Entrada" / "dpuscript"
 REGRAS_FILE = WORKSPACE / "dpuscript" / "memory" / "regras_atuacao.md"
@@ -333,25 +335,21 @@ def _claude_json(prompt: str, pasta: Path, schema: dict, timeout: int) -> tuple[
     ]
     backoffs = [45, 90, 180]
     for tent in range(len(backoffs) + 1):
-        try:
-            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=timeout,
-                                  cwd=str(CWD_LIMPO), env=_env(pasta))
-        except subprocess.TimeoutExpired:
+        # run_claude: lock global (1 chamada/vez no sistema) + mata árvore + reapa órfãos
+        rc, stdout, stderr = run_claude(cmd, prompt, str(CWD_LIMPO), _env(pasta), timeout)
+        if rc == -9:
             return {}, {}, "timeout"
-        except Exception as e:
-            return {}, {}, f"{type(e).__name__}: {e}"
-        saida = (proc.stdout or "") + " " + (proc.stderr or "")
+        saida = (stdout or "") + " " + (stderr or "")
         low = saida.lower()
-        if any(p in low for p in _RATE) and (proc.returncode != 0 or "is_error" in low):
+        if any(p in low for p in _RATE) and (rc != 0 or "is_error" in low):
             if tent < len(backoffs):
                 time.sleep(backoffs[tent])
                 continue
             return {}, {}, "rate_limit"
         try:
-            wrapper = json.loads(proc.stdout.strip())
+            wrapper = json.loads(stdout.strip())
         except Exception:
-            return {}, {}, f"json inválido (exit {proc.returncode}): {(proc.stderr or proc.stdout)[-200:]}"
+            return {}, {}, f"json inválido (exit {rc}): {(stderr or stdout)[-200:]}"
         structured = wrapper.get("structured_output") if isinstance(wrapper, dict) else None
         if not structured:
             # fallback: result como string com JSON
@@ -447,6 +445,132 @@ def _escrever_atuacao(paj: str, pasta: Path, d: dict, status: str, etapa: str) -
 
 
 # ---------------------------------------------------------------------------
+def _env_recurso(pasta: Path) -> dict:
+    """Env pro estágio recurso: config COMPLETA (precisa das skills do workspace
+    + MCPs de pesquisa bnp/cjf). NÃO usa config limpa nem --tools (é agêntico)."""
+    env = os.environ.copy()
+    for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT",
+              "CLAUDE_PROJECT_DIR", "CLAUDE_AGENT_RUN_ID",
+              "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        env.pop(k, None)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    env["FORMATAR_PECA_SAIDA_DIR"] = str(pasta)
+    env["FORMATAR_PECA_TEMPLATE"] = TEMPLATE_DOCX
+    return env
+
+
+def montar_prompt_recurso(paj_norm: str, pasta: Path, atuacao: dict) -> str:
+    prompt_max = _ler(pasta / "PROMPT_MAX.md")
+    peca_tipo = atuacao.get("peca_tipo", "") or "(definir)"
+    fundamento = atuacao.get("fundamento_decisao", "")
+    return f"""Você é o assistente jurídico da DPU (TNU + STJ, previdenciário). JP é Defensor Cat. Especial.
+
+A triagem JÁ decidiu que este PAJ é caso de **RECURSO**: {peca_tipo}.
+Fundamento da decisão: {fundamento}
+
+SUA TAREFA: redigir a peça completa, pronta pra JP revisar e protocolar.
+
+PASSOS OBRIGATÓRIOS (use as skills do workspace):
+1. Pesquise fundamentos (skill `pesquisa/pesquisa-juridica` ou `busca-rapida`) — só cite o que tiver origem rastreável.
+2. Redija a peça ({peca_tipo}) seguindo a skill de elaboração adequada.
+3. **OBRIGATÓRIO**: rode a skill `validacao/anti-alucinacao` ANTES de finalizar. Remova qualquer citação sem origem.
+4. Gere o DOCX via `skills/_shared/formatacao-docx/formatar_peca.py` salvando em `{pasta}`.
+5. Salve também o .txt da peça em `{pasta}`.
+
+NÃO protocole. NÃO movimente o SISDPU. Só prepare os arquivos.
+
+Ao FINAL, emita EXATAMENTE:
+@@@RECURSO_INICIO@@@
+PECA_TIPO: <tipo>
+ARQUIVOS: <nomes gerados separados por ; ou nenhum>
+RESUMO: <2-4 frases do que foi feito>
+ALERTAS: <pontos de atenção pro Defensor ou n/a>
+@@@RECURSO_FIM@@@
+
+--- PROMPT_MAX DO PAJ {paj_norm} ---
+{prompt_max}
+"""
+
+
+_REC_RE = re.compile(r"@@@RECURSO_INICIO@@@(.*?)@@@RECURSO_FIM@@@", re.DOTALL)
+
+
+def recurso(paj: str) -> dict:
+    # trava de orçamento (recurso é pesado — respeitar teto)
+    with _acc_lock:
+        consumido = (_acumulado["input"] + _acumulado["output"]
+                     + _acumulado["cache_read"] + _acumulado["cache_creation"])
+    if consumido >= MAX_TOKENS_RUN:
+        return {"paj": paj, "status": "pulado_budget"}
+
+    pasta = ENTRADA / paj
+    atuacao = _ler_json(pasta / "atuacao.json")
+    t0 = dt.datetime.now()
+    _salvar_status(paj, status="redigindo_recurso", inicio=t0.isoformat(timespec="seconds"))
+    log(f"[{paj}] redigindo recurso ({atuacao.get('peca_tipo','?')})…")
+
+    prompt = montar_prompt_recurso(paj, pasta, atuacao)
+    cmd = [
+        CLAUDE_CMD, "--print", "--model", "opus",
+        "--output-format", "json",
+        "--permission-mode", "bypassPermissions",
+    ]
+    backoffs = [60, 120, 240]
+    stdout = ""
+    for tent in range(len(backoffs) + 1):
+        # run_claude: lock global serializa (sem burst TPM) + mata árvore + reapa MCP órfãos
+        rc, stdout, stderr = run_claude(cmd, prompt, str(WORKSPACE), _env_recurso(pasta), TIMEOUT_RECURSO)
+        if rc == -9:
+            log(f"[{paj}] TIMEOUT recurso")
+            _salvar_status(paj, status="erro_recurso", erro="timeout")
+            return {"paj": paj, "status": "timeout"}
+        saida = (stdout or "") + " " + (stderr or "")
+        low = saida.lower()
+        if any(p in low for p in _RATE) and (rc != 0 or "is_error" in low):
+            if tent < len(backoffs):
+                log(f"[{paj}] rate limit — aguardando {backoffs[tent]}s")
+                time.sleep(backoffs[tent]); continue
+            _salvar_status(paj, status="rate_limit")
+            return {"paj": paj, "status": "rate_limit"}
+        break
+
+    try:
+        wrapper = json.loads(stdout.strip())
+    except Exception:
+        wrapper = {}
+    _contabilizar(wrapper, paj)
+    result_text = wrapper.get("result", "") if isinstance(wrapper, dict) else stdout
+
+    m = _REC_RE.search(result_text or "")
+    bloco = {}
+    if m:
+        for linha in m.group(1).splitlines():
+            mm = re.match(r"^([A-Z_]+):\s*(.*)$", linha)
+            if mm:
+                bloco[mm.group(1).lower()] = mm.group(2).strip()
+
+    # atualiza atuacao.json: status done + arquivos gerados
+    atuacao["status"] = "done"
+    atuacao["etapa"] = "recurso"
+    if bloco.get("resumo"):
+        atuacao["resumo_recurso"] = bloco["resumo"]
+    if bloco.get("alertas"):
+        atuacao["alertas"] = (atuacao.get("alertas", "") + " | " + bloco["alertas"]).strip(" |")
+    try:
+        (pasta / "atuacao.json").write_text(json.dumps(atuacao, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    dur = (dt.datetime.now() - t0).total_seconds()
+    with _acc_lock:
+        custo = _acumulado["custo_usd"]
+        toks = _acumulado["input"]+_acumulado["output"]+_acumulado["cache_read"]+_acumulado["cache_creation"]
+    log(f"[{paj}] RECURSO ok ({dur:.0f}s) | run acumulado: {toks:,} tok ${custo:.2f}")
+    _salvar_status(paj, status="done", etapa="recurso", duracao_s=round(dur))
+    return {"paj": paj, "status": "done", "arquivos": bloco.get("arquivos", "")}
+
+
 def listar_pajs() -> list[str]:
     if not ENTRADA.exists():
         return []
@@ -464,7 +588,7 @@ def main() -> int:
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--only")
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--workers", type=int, default=int(os.getenv("BATCH_WORKERS", "2")))
+    ap.add_argument("--workers", type=int, default=int(os.getenv("BATCH_WORKERS", "1")))
     args = ap.parse_args()
 
     pajs = listar_pajs()
@@ -475,15 +599,20 @@ def main() -> int:
         if not args.force:
             pajs = [p for p in pajs if _atuacao_status(p) not in ("done", "recurso_pendente")]
         fn = decidir
-    else:
-        log("estágio recurso ainda não habilitado nesta versão — abortando")
-        return 1
+    else:  # recurso
+        pajs = [p for p in pajs if _atuacao_status(p) == "recurso_pendente"]
+        fn = recurso
 
     if args.limit:
         pajs = pajs[: args.limit]
     if not pajs:
         log("nada a processar")
         return 0
+
+    # Hygiene: mata órfãos de runs anteriores antes de começar
+    n = reap_orphans()
+    if n:
+        log(f"reaper: {n} processo(s) órfão(s) limpo(s) no início")
 
     log(f"=== ESTÁGIO {args.stage.upper()} — {len(pajs)} PAJs, {args.workers} workers ===")
     resultados = []
