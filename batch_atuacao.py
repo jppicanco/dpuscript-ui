@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
-"""Batch autônomo de atuação por PAJ.
+"""Batch de atuação por PAJ — 2 estágios, leve e com medição de tokens.
 
-Para cada PAJ com PROMPT_MAX.md, roda o Claude CLI (Opus) com cwd no
-dpu-workspace — assim ele tem acesso a CLAUDE.md, skills (triagem,
-elaboracao, pesquisa, validacao/anti-alucinacao, arquivamento), MEMORY.md
-e bases. O Claude DECIDE autonomamente entre:
+PROBLEMA da v1 (corrigido): injetava o PROMPT_MAX inteiro (até 127k tokens),
+em modo agêntico (cwd=workspace + bypassPermissions → loop de ferramentas
+reenviando contexto), Opus em tudo, 66 processos frios (zero reuso de cache).
+Estourava a cota de 5h em <20 PAJs.
 
-  - DESPACHO/ciência  → mero expediente, intimação de audiência, etc. Só texto
-  - ARQUIVAMENTO      → irrecorribilidade / inviabilidade / vitória já obtida
-  - RECURSO           → decisão recorrível → peça completa + anti-alucinação + DOCX
+v2 — desenho leve (inspirado no planejar_service):
 
-Escreve por PAJ:
-  - elaboracao.json  (compat com a UI: {status, summary, last_action, concluido_em})
-  - atuacao.json     (estruturado: tipo, peca_tipo, prazo, resumo, o_que_fazer,
-                      movimentacao, arquivos, confianca, alertas)
+  ESTÁGIO 1 — DECISÃO (default, `--stage decisao`):
+    - Opus, 1 chamada só, SEM ferramentas agênticas (--setting-sources user,
+      --output-format json --json-schema). cwd = pasta do PAJ.
+    - Contexto MÍNIMO: metadata + resumo_curto + últimas 3 movimentações +
+      decisão mais recente truncada (head+tail). NÃO o PROMPT_MAX.
+    - regras_atuacao.md injetadas (decisão crítica respeita as correções do JP).
+    - Decide tipo (DESPACHO/ARQUIVAMENTO/RECURSO/NAO_ATUAR) e, p/ não-recurso,
+      já redige a movimentação pronta. Custo ~5-10k tokens/PAJ.
+    - RECURSO fica "recurso_pendente" (peça é estágio 2, gated).
 
-Resiliente: pool de N workers, pula PAJs já concluídos (salvo --force),
-loga progresso em batch_atuacao.log + batch_status.json continuamente.
+  ESTÁGIO 2 — RECURSO (`--stage recurso`):
+    - Opus agêntico (skills + anti-alucinação + DOCX) só nos recurso_pendente.
+    - Caro; rodar separado e com supervisão de cota.
 
-NÃO protocola nem movimenta o SISDPU — só prepara. JP revisa e protocola.
+Mede tokens/custo por PAJ (modelUsage do wrapper) e acumula em batch_status.json
+pra dar pra projetar consumo e parar com folga.
 
-Uso:
-    python batch_atuacao.py                  # todos os PAJs pendentes
-    python batch_atuacao.py --force          # reprocessa todos
-    python batch_atuacao.py --only 2026-039-07596
-    python batch_atuacao.py --limit 5        # só os 5 primeiros (teste)
-    python batch_atuacao.py --workers 3
+NÃO usa API paga (força OAuth). NÃO protocola nem movimenta SISDPU.
 """
 
 from __future__ import annotations
@@ -35,15 +35,14 @@ import datetime as dt
 import json
 import os
 import re
+import shutil as _shutil
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
 WORKSPACE = Path(os.getenv("DPU_WORKSPACE", r"E:\DPU\dpu-workspace"))
 ENTRADA = WORKSPACE / "Entrada" / "dpuscript"
 REGRAS_FILE = WORKSPACE / "dpuscript" / "memory" / "regras_atuacao.md"
@@ -51,28 +50,30 @@ TEMPLATE_DOCX = os.getenv(
     "FORMATAR_PECA_TEMPLATE",
     r"D:\DPU\MODELO ARE 1446634 - agravo interno hanseníase - PAJ 2023.040.06077.docx",
 )
-
-import shutil as _shutil
-CLAUDE_CMD = (
-    os.getenv("CLAUDE_CLI")
-    or _shutil.which("claude")
-    or r"C:\Users\JP\AppData\Roaming\npm\claude.CMD"
-)
+CLAUDE_CMD = (os.getenv("CLAUDE_CLI") or _shutil.which("claude")
+              or r"C:\Users\JP\AppData\Roaming\npm\claude.CMD")
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_FILE = BASE_DIR / "batch_atuacao.log"
 STATUS_FILE = BASE_DIR / "batch_status.json"
 
-TIMEOUT_SEG = int(os.getenv("BATCH_TIMEOUT", "1500"))  # 25 min por PAJ
+# Truncagens do contexto mínimo
+MAX_MOV_DESC = 800       # chars por descrição de movimentação
+N_MOVS = 3               # últimas N movimentações
+DECISAO_HEAD = 5000      # chars do início da decisão recente
+DECISAO_TAIL = 3000      # chars do fim (dispositivo)
+TIMEOUT_DECISAO = 240    # 4 min — decisão é 1 shot
+TIMEOUT_RECURSO = 1500   # 25 min — recurso agêntico
 
 _log_lock = threading.Lock()
-_status_lock = threading.Lock()
+_acc_lock = threading.Lock()
 _status: dict = {}
+_acumulado = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0,
+              "custo_usd": 0.0, "pajs": 0}
 
 
 def log(msg: str) -> None:
-    ts = dt.datetime.now().strftime("%H:%M:%S")
-    line = f"[{ts}] {msg}"
+    line = f"[{dt.datetime.now().strftime('%H:%M:%S')}] {msg}"
     with _log_lock:
         print(line, flush=True)
         try:
@@ -82,368 +83,399 @@ def log(msg: str) -> None:
             pass
 
 
-def atualizar_status(paj: str, **campos) -> None:
-    with _status_lock:
+def _salvar_status(paj: str, **campos) -> None:
+    with _acc_lock:
         _status.setdefault(paj, {})
         _status[paj].update(campos)
         _status[paj]["atualizado_em"] = dt.datetime.now().isoformat(timespec="seconds")
+        snapshot = {"_acumulado": dict(_acumulado), "pajs": dict(_status)}
         try:
-            STATUS_FILE.write_text(
-                json.dumps(_status, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            STATUS_FILE.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
         except Exception:
             pass
 
 
-# ---------------------------------------------------------------------------
-# Prompt
-# ---------------------------------------------------------------------------
-def _carregar_regras() -> str:
-    if REGRAS_FILE.exists():
-        try:
-            return REGRAS_FILE.read_text(encoding="utf-8")
-        except Exception:
-            return ""
-    return ""
+def _ler(p: Path, limite: int | None = None) -> str:
+    if not p.exists():
+        return ""
+    try:
+        t = p.read_text(encoding="utf-8", errors="replace")
+        return t[:limite] if limite else t
+    except Exception:
+        return ""
 
 
-def montar_prompt(paj_norm: str, pasta: Path) -> str:
-    prompt_max = (pasta / "PROMPT_MAX.md").read_text(encoding="utf-8", errors="replace")
-    regras = _carregar_regras()
-    bloco_regras = (
-        f"\n\n## REGRAS APRENDIDAS (correções do Defensor — RESPEITE À RISCA)\n{regras}\n"
-        if regras.strip()
-        else ""
-    )
-    pasta_abs = str(pasta)
-    return f"""Você é o assistente jurídico autônomo da DPU. JP é Defensor Público Federal Categoria Especial, atua na **TNU e no STJ** (matéria previdenciária majoritariamente).
+def _ler_json(p: Path) -> dict:
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {}
 
-Sua tarefa: analisar ESTE PAJ e DEIXAR A ATUAÇÃO PRONTA para o Defensor só revisar e protocolar. Você decide TUDO autonomamente — JP não está disponível agora; ele revisa de manhã.
 
-NÃO protocole nada. NÃO faça movimentação no SISDPU. Apenas PREPARE (texto + arquivos).{bloco_regras}
+_DATA_NOME_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})_ev(\d+)")
+# Tipos que carregam o conteúdo decisório (priorizados)
+_TIPOS_DECISORIOS = ("ACOR", "DESPADEC", "DECIS", "SENT", "VOTO", "EXTRATOATA", "QUESTORDEM")
+N_DOCS_DECISAO = 3        # nº de documentos recentes a alimentar
+MAX_DECISAO_TOTAL = 45000  # teto de chars total (custo controlado)
 
-## DECISÃO — escolha UMA atuação para este PAJ
 
-1. **DESPACHO / CIÊNCIA** — quando NÃO há peça a fazer:
-   - Intimação de audiência (só registrar ciência: "Ciente. Audiência designada para DD/MM às HH:MM.")
-   - Mero expediente, vista ao MPF, aguardando distribuição/julgamento, abertura de PAJ, decurso de prazo
-   - Decisão de mera ADMISSÃO/conhecimento/distribuição/conversão em diligência (NEUTRA — não é vitória nem derrota)
-   → Produza só o TEXTO da movimentação (curto), salve em `{pasta_abs}\\despacho.txt`. SEM DOCX.
+def _ordem_doc(f: Path) -> tuple:
+    """Chave de ordenação: (data, evento) extraídos do NOME (não mtime — todos
+    têm o mesmo mtime de sync). Sem data no nome → vai pro fim."""
+    m = _DATA_NOME_RE.search(f.name)
+    if m:
+        ano, mes, dia, ev = m.groups()
+        return (1, ano + mes + dia, int(ev))
+    return (0, "00000000", 0)
 
-2. **ARQUIVAMENTO** — use a skill `arquivamento`:
-   - Tipo 1: irrecorribilidade (ex: decisão monocrática do Presidente da TNU — vide regras)
-   - Tipo 2: inviabilidade de mérito (jurisprudência consolidada contra, sem distinguishing viável)
-   - Tipo 3: VITÓRIA já obtida e cumprida (acórdão favorável transitado, acordo cumprido)
-   → Redija o despacho de arquivamento, salve em `{pasta_abs}\\`. Texto pronto pro SISDPU.
 
-3. **RECURSO** — decisão DESFAVORÁVEL com recurso cabível e viável:
-   - Identifique o recurso correto (ED, agravo interno, REsp, AREsp, RE, memoriais, embargos de divergência)
-   - Use as skills de pesquisa + elaboração do workspace
-   - **OBRIGATÓRIO**: rode a skill `validacao/anti-alucinacao` ANTES de finalizar (toda citação tem que ter origem rastreável)
-   - Gere a peça final em DOCX via `skills/_shared/formatacao-docx/formatar_peca.py` (o DOCX deve ir para `{pasta_abs}\\`)
-   - Salve também o .txt da peça em `{pasta_abs}\\`
+def _decisao_recente(pasta: Path) -> tuple[str, str]:
+    """Concatena os N documentos MAIS RECENTES (por data no nome), priorizando
+    os decisórios. Retorna (texto, nomes). Teto de chars pra controlar custo;
+    documento gigante (OCR) é truncado head+tail."""
+    cands = []
+    for sub in ("decisoes_superiores", "peças", "pecas"):
+        d = pasta / sub
+        if d.exists():
+            cands += [f for f in d.iterdir() if f.is_file() and f.suffix == ".txt"]
+    if not cands:
+        return "", ""
+
+    # Separa: nomes COM data (TNU/e-Proc, confiável) vs SEM data (STJ por hash).
+    dated = [f for f in cands if _DATA_NOME_RE.search(f.name)]
+    undated = [f for f in cands if not _DATA_NOME_RE.search(f.name)]  # STJ_<hash>
+    dated.sort(key=_ordem_doc, reverse=True)
+    decisorios = [f for f in dated if any(t in f.name.upper() for t in _TIPOS_DECISORIOS)]
+
+    escolhidos: list[Path] = []
+    # 1. TODOS os STJ sem data (poucos por PAJ) — não dá pra ordenar por nome,
+    #    o modelo lê as datas internas. Sempre incluir pra não perder decisão STJ.
+    escolhidos += undated
+    # 2. Documento decisório TNU mais recente (acórdão/despacho/sentença)
+    if decisorios:
+        escolhidos.append(decisorios[0])
+    # 3. Documentos TNU mais recentes (qualquer tipo) como contexto
+    for f in dated[:N_DOCS_DECISAO]:
+        if f not in escolhidos:
+            escolhidos.append(f)
+    # dedup preservando ordem de inclusão (STJ → decisório → recentes)
+    vistos = set()
+    escolhidos = [f for f in escolhidos if not (f in vistos or vistos.add(f))]
+
+    partes, nomes, total = [], [], 0
+    for f in escolhidos:
+        txt = _ler(f)
+        if not txt.strip():
+            continue
+        # trunca documento individual gigante (OCR)
+        if len(txt) > 25000:
+            txt = txt[:15000] + "\n\n[...TRECHO OMITIDO (documento extenso)...]\n\n" + txt[-8000:]
+        if total + len(txt) > MAX_DECISAO_TOTAL:
+            txt = txt[: max(0, MAX_DECISAO_TOTAL - total)]
+        if not txt:
+            break
+        partes.append(f"--- {f.name} ---\n{txt}")
+        nomes.append(f.name)
+        total += len(txt)
+    return "\n\n".join(partes), ", ".join(nomes)
+
+
+def montar_prompt_decisao(paj_norm: str, pasta: Path) -> str:
+    meta = _ler_json(pasta / "metadata.json")
+    det = meta.get("detalhes_sisdpu", {}) or {}
+    movs = det.get("movimentacoes", []) or []
+    movs = sorted(movs, key=lambda m: int(m.get("seq", 0) or 0), reverse=True)[:N_MOVS]
+    movs_txt = "\n".join(
+        f"  [{m.get('data','?')}] {(m.get('descricao','') or '')[:MAX_MOV_DESC]}"
+        for m in movs
+    ) or "  (sem movimentações no metadata)"
+    resumo = _ler(pasta / "resumo_curto.md", 4000)
+    decisao, decisao_arq = _decisao_recente(pasta)
+    regras = _ler(REGRAS_FILE)
+    bloco_regras = f"\n\n## REGRAS APRENDIDAS (correções do Defensor — RESPEITE)\n{regras}\n" if regras.strip() else ""
+
+    return f"""Você é o assistente jurídico da DPU. JP é Defensor Público Federal Cat. Especial, atua TNU + STJ (previdenciário).
+
+Sua tarefa: DECIDIR a atuação deste PAJ. Esta é a decisão mais importante — ela define todo o resto. Leia de trás pra frente: a movimentação/decisão MAIS RECENTE geralmente já determina o que fazer.{bloco_regras}
+
+## TIPOS DE ATUAÇÃO
+- **DESPACHO** — não há peça a fazer: intimação de audiência (registrar ciência), mero expediente, vista ao MPF, aguardando distribuição/julgamento, abertura de PAJ, decurso, OU decisão de mera ADMISSÃO/conhecimento/distribuição (NEUTRA, nem vitória nem derrota), OU a DPU é parte vencedora e o adverso recorreu (só acompanhar).
+- **ARQUIVAMENTO** — (a) irrecorribilidade (ex: monocrática do Presidente da TNU), (b) inviabilidade de mérito (juris consolidada contra sem distinguishing), (c) VITÓRIA já obtida e cumprida.
+- **RECURSO** — decisão DESFAVORÁVEL ao assistido, com recurso cabível e viável (ED, agravo interno, REsp, AREsp, RE, memoriais, embargos divergência). NÃO marque recurso se a DPU já interpôs o recurso cabível (verifique nas movimentações) ou se a DPU é a vencedora.
+- **NAO_ATUAR** — nada a fazer.
 
 ## REGRAS PROCESSUAIS
-- TNU/STJ/JEF: SEM dobra de prazo da DPU. Dias úteis. +10 dias de ciência ficta no e-Proc.
-- Decisão monocrática do RELATOR desfavorável → cabe agravo interno.
-- Decisão monocrática do PRESIDENTE da TNU → em regra IRRECORRÍVEL (no máximo ED por omissão/contradição/obscuridade).
-- Decisão COLEGIADA → ED só se vício; pode caber REsp/RE.
-- NUNCA invente jurisprudência, número de processo, tese ou citação. Se não tem na base/PAJ, não cite.
+- TNU/STJ/JEF: SEM dobra DPU. Dias úteis. +10d ciência ficta e-Proc.
+- Monocrática do RELATOR desfavorável → agravo interno. Monocrática do PRESIDENTE TNU → em regra IRRECORRÍVEL (no máx ED). Colegiada → ED só se vício; pode caber REsp/RE.
+- NUNCA invente citação/jurisprudência/número.
 
-## ESFORÇO PROPORCIONAL
-- Despacho/ciência: texto curto, só .txt. Rápido.
-- Arquivamento: despacho fundamentado, skill arquivamento.
-- Recurso: peça completa + anti-alucinação + DOCX. Capriche — é peça judicial real.
+## CONTEXTO DO PAJ {paj_norm}
+- Assistido: {meta.get('assistido_caixa','?')}
+- Ofício: {meta.get('oficio_caixa','?')}
+- Foro detectado: {meta.get('foro_detectado','?')}
+- Classificação automática (heurística — pode estar errada): {meta.get('classificacao','?')}
+- Processo judicial: {meta.get('processo_judicial','?')}
 
-## SAÍDA OBRIGATÓRIA
-Faça todo o trabalho (use ferramentas, escreva os arquivos na pasta do PAJ) e, ao FINAL da sua resposta, emita EXATAMENTE este bloco estruturado (sem markdown, sem nada depois dele):
+### RESUMO (gerado pelo pipeline)
+{resumo}
 
-@@@ATUACAO_INICIO@@@
-TIPO: <DESPACHO|ARQUIVAMENTO|RECURSO|NAO_ATUAR>
-PECA_TIPO: <ex: agravo_interno_stj|embargos_declaracao_tnu|resp|despacho_ciencia|despacho_arquivamento|nenhuma>
-PRAZO: <DD/MM/AAAA ou n/a>
-CONFIANCA: <alta|media|baixa>
-ARQUIVOS: <nomes dos arquivos gerados separados por ; ou "nenhum">
-RESUMO: <2 a 4 frases: o que é este PAJ, qual a decisão/movimentação atual, e o que ela significa>
-O_QUE_FAZER: <1 a 3 frases diretas dizendo o que o Defensor tem que fazer agora>
-ALERTAS: <riscos, dúvidas ou pontos de atenção; ou n/a>
----MOVIMENTACAO---
-<texto PRONTO pra colar no SISDPU — a movimentação/despacho. Se for recurso, escreva a movimentação de juntada da peça, ex: "Junta-se agravo interno em face da decisão de fls. ...">
-@@@ATUACAO_FIM@@@
+### ÚLTIMAS {N_MOVS} MOVIMENTAÇÕES (ORDEM CRONOLÓGICA REAL — mais recente primeiro)
+ESTA é a verdade cronológica do processo. Use-a pra saber qual é o evento/decisão MAIS RECENTE.
+{movs_txt}
 
---- INÍCIO DO PROMPT_MAX DO PAJ {paj_norm} ---
+### DOCUMENTOS RELEVANTES NA PASTA ({decisao_arq or 'nenhum'})
+ATENÇÃO: os documentos abaixo PODEM NÃO estar em ordem cronológica (alguns vêm sem data no nome, ex: STJ). Use as DATAS INTERNAS de cada um + as movimentações acima pra identificar qual é a decisão mais recente e relevante.
+{decisao or '(sem documento de decisão baixado)'}
 
-{prompt_max}
+## SAÍDA
+Responda SOMENTE o JSON do schema. Para DESPACHO/ARQUIVAMENTO/NAO_ATUAR, o campo `movimentacao` deve trazer o TEXTO pronto pra colar no SISDPU. Para RECURSO, `movimentacao` traz a movimentação de juntada da peça (a peça em si será redigida depois) e `precisa_aprofundar`=true.
 """
 
 
-# ---------------------------------------------------------------------------
-# Execução
-# ---------------------------------------------------------------------------
-def _env_para_claude(pasta: Path) -> dict:
+DECISAO_SCHEMA = {
+    "type": "object",
+    "required": ["tipo", "peca_tipo", "fundamento_decisao", "resumo",
+                 "o_que_fazer", "movimentacao", "confianca"],
+    "properties": {
+        "tipo": {"type": "string", "enum": ["DESPACHO", "ARQUIVAMENTO", "RECURSO", "NAO_ATUAR"]},
+        "peca_tipo": {"type": "string"},
+        "prazo": {"type": "string"},
+        "confianca": {"type": "string", "enum": ["alta", "media", "baixa"]},
+        "fundamento_decisao": {"type": "string",
+            "description": "1-3 frases: POR QUE este tipo (a decisão crítica que JP vai auditar)"},
+        "resumo": {"type": "string", "description": "2-4 frases: o que é o PAJ e o que aconteceu"},
+        "o_que_fazer": {"type": "string", "description": "1-3 frases diretas pro Defensor"},
+        "alertas": {"type": "string"},
+        "movimentacao": {"type": "string", "description": "texto pronto pro SISDPU"},
+        "precisa_aprofundar": {"type": "boolean",
+            "description": "true se for RECURSO (peça precisa estágio 2)"},
+    },
+}
+
+
+def _env(pasta: Path) -> dict:
     env = os.environ.copy()
     for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT",
               "CLAUDE_PROJECT_DIR", "CLAUDE_AGENT_RUN_ID",
-              # NUNCA usar API paga — força OAuth (plano enterprise via claude login)
               "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         env.pop(k, None)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
-    # formatar_peca.py salva o DOCX/PDF na pasta do próprio PAJ
     env["FORMATAR_PECA_SAIDA_DIR"] = str(pasta)
     env["FORMATAR_PECA_TEMPLATE"] = TEMPLATE_DOCX
     return env
 
 
-_BLOCO_RE = re.compile(
-    r"@@@ATUACAO_INICIO@@@(.*?)@@@ATUACAO_FIM@@@", re.DOTALL
-)
+_RATE = ("limitando temporariamente", "rate limit", "rate_limit", "429",
+         "too many requests", "overloaded", "quota", "try again later")
 
 
-def parse_bloco(texto: str) -> dict:
-    """Extrai o bloco estruturado @@@ATUACAO@@@ do output do Claude."""
-    m = _BLOCO_RE.search(texto or "")
-    if not m:
-        return {}
-    corpo = m.group(1)
-    # separa cabeçalho (key: value) da movimentação
-    if "---MOVIMENTACAO---" in corpo:
-        cab, mov = corpo.split("---MOVIMENTACAO---", 1)
-    else:
-        cab, mov = corpo, ""
-    campos: dict = {"movimentacao": mov.strip()}
-    chave_map = {
-        "TIPO": "tipo",
-        "PECA_TIPO": "peca_tipo",
-        "PRAZO": "prazo",
-        "CONFIANCA": "confianca",
-        "ARQUIVOS": "arquivos",
-        "RESUMO": "resumo",
-        "O_QUE_FAZER": "o_que_fazer",
-        "ALERTAS": "alertas",
+def _contabilizar(wrapper: dict, paj: str) -> dict:
+    """Extrai modelUsage do wrapper e acumula. Retorna dict de uso do PAJ."""
+    uso = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "custo_usd": 0.0}
+    mu = wrapper.get("modelUsage", {}) if isinstance(wrapper, dict) else {}
+    for _modelo, v in (mu or {}).items():
+        uso["input"] += v.get("inputTokens", 0) or 0
+        uso["output"] += v.get("outputTokens", 0) or 0
+        uso["cache_read"] += v.get("cacheReadInputTokens", 0) or 0
+        uso["cache_creation"] += v.get("cacheCreationInputTokens", 0) or 0
+        uso["custo_usd"] += v.get("costUSD", 0.0) or 0.0
+    with _acc_lock:
+        for k in ("input", "output", "cache_read", "cache_creation", "custo_usd"):
+            _acumulado[k] += uso[k]
+        _acumulado["pajs"] += 1
+    return uso
+
+
+CWD_LIMPO = Path(os.getenv("TEMP", r"C:\Users\JP\AppData\Local\Temp")) / "dpu_decisao_cwd"
+
+
+def _claude_json(prompt: str, pasta: Path, schema: dict, timeout: int) -> tuple[dict, dict, str]:
+    """Chamada leve (sem ferramentas agênticas). Retorna (structured, wrapper, erro).
+
+    Roda de um cwd LIMPO (fora do workspace) + --strict-mcp-config pra NÃO
+    carregar .mcp.json/CLAUDE.md/hooks do projeto. Reduz o contexto ao mínimo:
+    só o system base do Claude Code + nosso prompt. Sequencial → PAJ 2+
+    reaproveita o cache do system base (barato).
+    """
+    CWD_LIMPO.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        CLAUDE_CMD, "--print", "--model", "opus",
+        "--output-format", "json",
+        "--json-schema", json.dumps(schema),
+        "--strict-mcp-config",
+        "--setting-sources", "user",
+        "--append-system-prompt",
+        "Você é executor de tarefa estruturada. Responda só o JSON do schema, sem markdown.",
+    ]
+    backoffs = [45, 90, 180]
+    for tent in range(len(backoffs) + 1):
+        try:
+            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=timeout,
+                                  cwd=str(CWD_LIMPO), env=_env(pasta))
+        except subprocess.TimeoutExpired:
+            return {}, {}, "timeout"
+        except Exception as e:
+            return {}, {}, f"{type(e).__name__}: {e}"
+        saida = (proc.stdout or "") + " " + (proc.stderr or "")
+        low = saida.lower()
+        if any(p in low for p in _RATE) and (proc.returncode != 0 or "is_error" in low):
+            if tent < len(backoffs):
+                time.sleep(backoffs[tent])
+                continue
+            return {}, {}, "rate_limit"
+        try:
+            wrapper = json.loads(proc.stdout.strip())
+        except Exception:
+            return {}, {}, f"json inválido (exit {proc.returncode}): {(proc.stderr or proc.stdout)[-200:]}"
+        structured = wrapper.get("structured_output") if isinstance(wrapper, dict) else None
+        if not structured:
+            # fallback: result como string com JSON
+            r = wrapper.get("result", "") if isinstance(wrapper, dict) else ""
+            if isinstance(r, str):
+                m = re.search(r"\{.*\}", r, re.DOTALL)
+                if m:
+                    try:
+                        structured = json.loads(m.group(0))
+                    except Exception:
+                        structured = None
+        return (structured or {}), (wrapper if isinstance(wrapper, dict) else {}), ""
+    return {}, {}, "rate_limit"
+
+
+def decidir(paj: str) -> dict:
+    pasta = ENTRADA / paj
+    t0 = dt.datetime.now()
+    _salvar_status(paj, status="decidindo", inicio=t0.isoformat(timespec="seconds"))
+    prompt = montar_prompt_decisao(paj, pasta)
+    structured, wrapper, erro = _claude_json(prompt, pasta, DECISAO_SCHEMA, TIMEOUT_DECISAO)
+    uso = _contabilizar(wrapper, paj)
+    dur = (dt.datetime.now() - t0).total_seconds()
+
+    if erro:
+        log(f"[{paj}] DECISÃO falhou: {erro} ({dur:.0f}s)")
+        _salvar_status(paj, status="erro_decisao", erro=erro, **uso)
+        return {"paj": paj, "status": "erro", "erro": erro, "uso": uso}
+
+    tipo = structured.get("tipo", "?")
+    # status: recurso vira recurso_pendente (estágio 2); resto é done
+    novo_status = "recurso_pendente" if tipo == "RECURSO" else "done"
+    _escrever_atuacao(paj, pasta, structured, status=novo_status, etapa="decisao")
+    # despacho.txt pros casos simples
+    if tipo != "RECURSO" and structured.get("movimentacao"):
+        try:
+            (pasta / "despacho.txt").write_text(structured["movimentacao"], encoding="utf-8")
+        except Exception:
+            pass
+
+    with _acc_lock:
+        custo_tot = _acumulado["custo_usd"]
+        pajs_tot = _acumulado["pajs"]
+    log(f"[{paj}] DECISÃO={tipo} conf={structured.get('confianca','?')} "
+        f"({dur:.0f}s, ${uso['custo_usd']:.3f}, cache_cr={uso['cache_creation']}) "
+        f"| acumulado: {pajs_tot} PAJs ${custo_tot:.2f}")
+    _salvar_status(paj, status=novo_status, tipo=tipo, duracao_s=round(dur), **uso)
+    return {"paj": paj, "status": novo_status, "tipo": tipo, "uso": uso}
+
+
+def _escrever_atuacao(paj: str, pasta: Path, d: dict, status: str, etapa: str) -> None:
+    agora = dt.datetime.now().isoformat(timespec="seconds")
+    atuacao = {
+        "status": "done" if status == "done" else status,
+        "tipo": d.get("tipo", ""),
+        "peca_tipo": d.get("peca_tipo", ""),
+        "prazo": d.get("prazo", ""),
+        "confianca": d.get("confianca", ""),
+        "fundamento_decisao": d.get("fundamento_decisao", ""),
+        "resumo": d.get("resumo", ""),
+        "o_que_fazer": d.get("o_que_fazer", ""),
+        "alertas": d.get("alertas", ""),
+        "movimentacao": d.get("movimentacao", ""),
+        "etapa": etapa,
+        "concluido_em": agora,
     }
-    cur_key = None
-    buf: dict[str, list] = {}
-    for linha in cab.splitlines():
-        m2 = re.match(r"^([A-Z_]+):\s*(.*)$", linha)
-        if m2 and m2.group(1) in chave_map:
-            cur_key = chave_map[m2.group(1)]
-            buf[cur_key] = [m2.group(2)]
-        elif cur_key:
-            buf[cur_key].append(linha)
-    for k, v in buf.items():
-        campos[k] = "\n".join(v).strip()
-    return campos
+    try:
+        (pasta / "atuacao.json").write_text(json.dumps(atuacao, ensure_ascii=False, indent=2),
+                                            encoding="utf-8")
+    except Exception:
+        pass
+    # compat UI antiga
+    try:
+        (pasta / "elaboracao.json").write_text(json.dumps({
+            "status": "done" if status in ("done", "recurso_pendente") else status,
+            "summary": (f"[{d.get('tipo','')}] {d.get('fundamento_decisao','')}\n\n"
+                        f"{d.get('resumo','')}\n\nO que fazer: {d.get('o_que_fazer','')}"),
+            "last_action": f"batch_{etapa}", "concluido_em": agora,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
-_RATE_PATTERNS = (
-    "limitando temporariamente",
-    "rate limit", "rate_limit", "rate-limit",
-    "429", "too many requests", "overloaded", "quota",
-    "tente novamente", "try again later",
-)
-
-
-def _e_rate_limit(saida: str, returncode: int) -> bool:
-    """Detecta rate limit da Anthropic na saída do claude CLI."""
-    if returncode == 0:
-        # Mesmo com exit 0, claude pode retornar is_error com a msg no result
-        low = (saida or "").lower()
-        return any(p in low for p in _RATE_PATTERNS) and "is_error" in low
-    low = (saida or "").lower()
-    return any(p in low for p in _RATE_PATTERNS)
-
-
+# ---------------------------------------------------------------------------
 def listar_pajs() -> list[str]:
     if not ENTRADA.exists():
         return []
-    out = []
-    for d in sorted(ENTRADA.iterdir()):
-        if d.is_dir() and (d / "PROMPT_MAX.md").exists():
-            out.append(d.name)
-    return out
+    return [d.name for d in sorted(ENTRADA.iterdir())
+            if d.is_dir() and (d / "PROMPT_MAX.md").exists()]
 
 
-def ja_concluido(paj: str) -> bool:
-    f = ENTRADA / paj / "atuacao.json"
-    if not f.exists():
-        return False
-    try:
-        d = json.loads(f.read_text(encoding="utf-8"))
-        return d.get("status") == "done"
-    except Exception:
-        return False
-
-
-def processar(paj: str) -> dict:
-    pasta = ENTRADA / paj
-    inicio = dt.datetime.now()
-    atualizar_status(paj, status="rodando", inicio=inicio.isoformat(timespec="seconds"))
-    log(f"[{paj}] iniciando…")
-
-    try:
-        prompt = montar_prompt(paj, pasta)
-    except Exception as e:
-        log(f"[{paj}] ERRO montando prompt: {e}")
-        atualizar_status(paj, status="erro", erro=f"prompt: {e}")
-        return {"paj": paj, "status": "erro", "erro": str(e)}
-
-    cmd = [
-        CLAUDE_CMD,
-        "--print",
-        "--model", "opus",
-        "--output-format", "json",
-        "--permission-mode", "bypassPermissions",
-    ]
-
-    # Retry com backoff exponencial pra rate limit da Anthropic.
-    # Backoffs em segundos; len = nº de tentativas extras.
-    backoffs = [45, 90, 180, 300]
-    proc = None
-    result_text = ""
-    for tentativa in range(len(backoffs) + 1):
-        try:
-            proc = subprocess.run(
-                cmd,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=TIMEOUT_SEG,
-                cwd=str(WORKSPACE),
-                env=_env_para_claude(pasta),
-            )
-        except subprocess.TimeoutExpired:
-            log(f"[{paj}] TIMEOUT ({TIMEOUT_SEG}s)")
-            atualizar_status(paj, status="timeout")
-            _escrever_resultado(paj, pasta, status="timeout", summary="(timeout)", bloco={})
-            return {"paj": paj, "status": "timeout"}
-        except Exception as e:
-            log(f"[{paj}] ERRO subprocess: {type(e).__name__}: {e}")
-            atualizar_status(paj, status="erro", erro=str(e))
-            return {"paj": paj, "status": "erro", "erro": str(e)}
-
-        saida = (proc.stdout or "") + " " + (proc.stderr or "")
-        if _e_rate_limit(saida, proc.returncode):
-            if tentativa < len(backoffs):
-                espera = backoffs[tentativa]
-                log(f"[{paj}] rate limit — aguardando {espera}s (tentativa {tentativa + 1}/{len(backoffs)})")
-                atualizar_status(paj, status="rate_limit_retry", tentativa=tentativa + 1)
-                import time as _t
-                _t.sleep(espera)
-                continue
-            else:
-                log(f"[{paj}] rate limit persistente após {len(backoffs)} tentativas — desisto")
-                atualizar_status(paj, status="rate_limit")
-                _escrever_resultado(paj, pasta, status="erro",
-                                    summary="rate limit persistente (Anthropic)", bloco={})
-                return {"paj": paj, "status": "rate_limit"}
-        break  # não é rate limit — sai do loop de retry
-
-    if proc.returncode != 0:
-        log(f"[{paj}] exit {proc.returncode}: {(proc.stderr or proc.stdout)[-300:]}")
-        atualizar_status(paj, status="erro", erro=f"exit {proc.returncode}")
-        _escrever_resultado(paj, pasta, status="erro",
-                            summary=f"exit {proc.returncode}: {(proc.stderr or proc.stdout)[-500:]}", bloco={})
-        return {"paj": paj, "status": "erro"}
-
-    # output-format json → wrapper {"result": "<texto final>", ...}
-    try:
-        wrapper = json.loads(proc.stdout.strip())
-        result_text = wrapper.get("result", "") if isinstance(wrapper, dict) else ""
-    except Exception:
-        result_text = proc.stdout
-
-    bloco = parse_bloco(result_text)
-    tipo = bloco.get("tipo", "?")
-    dur = (dt.datetime.now() - inicio).total_seconds()
-    _escrever_resultado(paj, pasta, status="done", summary=result_text, bloco=bloco)
-    log(f"[{paj}] OK tipo={tipo} ({dur:.0f}s)")
-    atualizar_status(paj, status="done", tipo=tipo, duracao_s=round(dur))
-    return {"paj": paj, "status": "done", "tipo": tipo}
-
-
-def _escrever_resultado(paj: str, pasta: Path, status: str, summary: str, bloco: dict) -> None:
-    agora = dt.datetime.now().isoformat(timespec="seconds")
-    # elaboracao.json — compat com a UI existente
-    try:
-        (pasta / "elaboracao.json").write_text(
-            json.dumps({
-                "status": status,
-                "summary": summary,
-                "last_action": "batch_atuacao",
-                "concluido_em": agora,
-            }, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-    # atuacao.json — estruturado pra Central de Atuação
-    try:
-        (pasta / "atuacao.json").write_text(
-            json.dumps({
-                "status": status,
-                "tipo": bloco.get("tipo", ""),
-                "peca_tipo": bloco.get("peca_tipo", ""),
-                "prazo": bloco.get("prazo", ""),
-                "confianca": bloco.get("confianca", ""),
-                "arquivos": bloco.get("arquivos", ""),
-                "resumo": bloco.get("resumo", ""),
-                "o_que_fazer": bloco.get("o_que_fazer", ""),
-                "alertas": bloco.get("alertas", ""),
-                "movimentacao": bloco.get("movimentacao", ""),
-                "concluido_em": agora,
-            }, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
+def _atuacao_status(paj: str) -> str:
+    return _ler_json(ENTRADA / paj / "atuacao.json").get("status", "")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--force", action="store_true", help="reprocessa PAJs já concluídos")
-    ap.add_argument("--only", help="processa só este PAJ (norm: 2026-039-07596)")
-    ap.add_argument("--limit", type=int, default=0, help="limita N PAJs (teste)")
-    ap.add_argument("--workers", type=int, default=int(os.getenv("BATCH_WORKERS", "3")))
+    ap.add_argument("--stage", choices=["decisao", "recurso"], default="decisao")
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--only")
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--workers", type=int, default=int(os.getenv("BATCH_WORKERS", "2")))
     args = ap.parse_args()
 
     pajs = listar_pajs()
     if args.only:
         pajs = [p for p in pajs if p == args.only]
-    if not args.force:
-        pajs = [p for p in pajs if not ja_concluido(p)]
+
+    if args.stage == "decisao":
+        if not args.force:
+            pajs = [p for p in pajs if _atuacao_status(p) not in ("done", "recurso_pendente")]
+        fn = decidir
+    else:
+        log("estágio recurso ainda não habilitado nesta versão — abortando")
+        return 1
+
     if args.limit:
         pajs = pajs[: args.limit]
-
     if not pajs:
-        log("nada a processar (todos concluídos? use --force)")
+        log("nada a processar")
         return 0
 
-    log(f"=== BATCH ATUAÇÃO — {len(pajs)} PAJs, {args.workers} workers, modelo opus ===")
-    log(f"CLAUDE_CMD={CLAUDE_CMD}")
+    log(f"=== ESTÁGIO {args.stage.upper()} — {len(pajs)} PAJs, {args.workers} workers ===")
     resultados = []
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futs = {ex.submit(processar, p): p for p in pajs}
+        futs = {ex.submit(fn, p): p for p in pajs}
         feito = 0
         for fut in as_completed(futs):
             feito += 1
             try:
-                r = fut.result()
+                resultados.append(fut.result())
             except Exception as e:
-                r = {"paj": futs[fut], "status": "erro", "erro": str(e)}
-            resultados.append(r)
-            log(f"--- progresso: {feito}/{len(pajs)} ---")
+                resultados.append({"paj": futs[fut], "status": "erro", "erro": str(e)})
+            log(f"--- {feito}/{len(pajs)} ---")
 
-    # Resumo final
-    por_status: dict[str, int] = {}
-    por_tipo: dict[str, int] = {}
+    tipos: dict[str, int] = {}
     for r in resultados:
-        por_status[r.get("status", "?")] = por_status.get(r.get("status", "?"), 0) + 1
-        if r.get("tipo"):
-            por_tipo[r["tipo"]] = por_tipo.get(r["tipo"], 0) + 1
-    log(f"=== FIM === status={por_status} tipos={por_tipo}")
+        t = r.get("tipo") or r.get("status", "?")
+        tipos[t] = tipos.get(t, 0) + 1
+    with _acc_lock:
+        a = dict(_acumulado)
+    log(f"=== FIM {args.stage} === tipos={tipos}")
+    log(f"=== CONSUMO: {a['pajs']} PAJs | input={a['input']} output={a['output']} "
+        f"cache_read={a['cache_read']} cache_creation={a['cache_creation']} | TOTAL ${a['custo_usd']:.2f} ===")
     return 0
 
 
