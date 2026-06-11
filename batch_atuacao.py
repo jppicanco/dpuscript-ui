@@ -461,34 +461,38 @@ def _env_recurso(pasta: Path) -> dict:
 
 
 def montar_prompt_recurso(paj_norm: str, pasta: Path, atuacao: dict) -> str:
-    prompt_max = _ler(pasta / "PROMPT_MAX.md")
     peca_tipo = atuacao.get("peca_tipo", "") or "(definir)"
     fundamento = atuacao.get("fundamento_decisao", "")
+    recorrida, rec_nomes = _decisao_recente(pasta)   # TEXTO da decisão recorrida (não o PROMPT_MAX magro)
+    prompt_max = _ler(pasta / "PROMPT_MAX.md", 8000)
     return f"""Você é o assistente jurídico da DPU (TNU + STJ, previdenciário). JP é Defensor Cat. Especial.
 
-A triagem JÁ decidiu que este PAJ é caso de **RECURSO**: {peca_tipo}.
-Fundamento da decisão: {fundamento}
+A triagem JÁ decidiu: este PAJ é **RECURSO** — {peca_tipo}.
+Fundamento: {fundamento}
 
-SUA TAREFA: redigir a peça completa, pronta pra JP revisar e protocolar.
+SUA TAREFA: redigir a peça COMPLETA e PRONTA. Você TEM o texto da decisão recorrida abaixo. NÃO pare na análise — produza os arquivos no disco.
 
-PASSOS OBRIGATÓRIOS (use as skills do workspace):
-1. Pesquise fundamentos (skill `pesquisa/pesquisa-juridica` ou `busca-rapida`) — só cite o que tiver origem rastreável.
-2. Redija a peça ({peca_tipo}) seguindo a skill de elaboração adequada.
-3. **OBRIGATÓRIO**: rode a skill `validacao/anti-alucinacao` ANTES de finalizar. Remova qualquer citação sem origem.
-4. Gere o DOCX via `skills/_shared/formatacao-docx/formatar_peca.py` salvando em `{pasta}`.
-5. Salve também o .txt da peça em `{pasta}`.
+PASSOS OBRIGATÓRIOS (execute de verdade, com as ferramentas — não só descreva):
+1. **PESQUISA JURISPRUDENCIAL OBRIGATÓRIA**: use os MCPs `bnp-api` (buscar_precedentes) e `cjf-jurisprudencia` (buscar_jurisprudencia_cjf) pra achar precedentes TNU/STJ/STF que sustentem a tese. Monte o Banco de Fontes Verificadas. SÓ cite o que vier dessas fontes (origem rastreável).
+2. Redija a peça ({peca_tipo}) com a skill de elaboração adequada, rebatendo os fundamentos da recorrida.
+3. **OBRIGATÓRIO**: rode `validacao/anti-alucinacao` — remova citação sem origem.
+4. **ESCREVA os arquivos no disco** (use a ferramenta de escrita): salve o `.txt` da peça em `{pasta}` e gere o `.docx` via `python skills/_shared/formatacao-docx/formatar_peca.py --entrada <txt> --tipo-peca <agravo|embargos|memoriais> --paj {paj_norm}` (env FORMATAR_PECA_SAIDA_DIR já aponta pra pasta do PAJ).
 
-NÃO protocole. NÃO movimente o SISDPU. Só prepare os arquivos.
+NÃO protocole. NÃO movimente o SISDPU.
 
-Ao FINAL, emita EXATAMENTE:
+Ao FINAL, emita EXATAMENTE (e só depois de ter ESCRITO os arquivos):
 @@@RECURSO_INICIO@@@
 PECA_TIPO: <tipo>
-ARQUIVOS: <nomes gerados separados por ; ou nenhum>
-RESUMO: <2-4 frases do que foi feito>
-ALERTAS: <pontos de atenção pro Defensor ou n/a>
+ARQUIVOS: <nomes .txt/.docx gerados, separados por ; — se vazio, explique em ALERTAS por que não gerou>
+RESUMO: <2-4 frases>
+PRECEDENTES_USADOS: <quantos precedentes do MCP citou>
+ALERTAS: <pontos de atenção ou n/a>
 @@@RECURSO_FIM@@@
 
---- PROMPT_MAX DO PAJ {paj_norm} ---
+==== DECISÃO RECORRIDA E DOCS ({rec_nomes or 'nenhum'}) ====
+{recorrida or '(sem documento — verifique a pasta peças/ com a ferramenta Read)'}
+
+==== CONTEXTO RESUMIDO (PROMPT_MAX, trecho) ====
 {prompt_max}
 """
 
