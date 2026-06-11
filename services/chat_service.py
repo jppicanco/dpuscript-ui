@@ -90,49 +90,48 @@ class ChatSession:
             self._reader_thread = threading.Thread(target=self._read_output, daemon=True)
             self._reader_thread.start()
 
-            # Envia PROMPT_MAX como prompt direto (texto, nao JSON)
+            # Envia PROMPT_MAX + decisao do Grok como prompt inicial
             prompt_content = prompt_path.read_text(encoding="utf-8", errors="replace")
             paj_pasta = ENTRADA_DIR / self.paj_norm
+            regras_path = DPU_WORKSPACE / "dpuscript" / "memory" / "regras_atuacao.md"
+
+            # Le decisao que o Grok ja tomou (se existir)
+            import json as _json
+            atuacao_path = paj_pasta / "atuacao.json"
+            atuacao_resumo = ""
+            if atuacao_path.exists():
+                try:
+                    at = _json.loads(atuacao_path.read_text(encoding="utf-8"))
+                    atuacao_resumo = (
+                        f"\n## DECISAO DO GROK (modelo {at.get('modelo', 'grok')})\n"
+                        f"- Tipo: **{at.get('tipo', '?')}** (confianca: {at.get('confianca', '?')})\n"
+                        f"- Fundamento: {at.get('fundamento_decisao', '')}\n"
+                        f"- O que fazer: {at.get('o_que_fazer', '')}\n"
+                        f"- Movimentacao sugerida: {at.get('movimentacao', '')}\n"
+                        f"- Alertas: {at.get('alertas', '') or 'nenhum'}\n"
+                    )
+                except Exception:
+                    pass
+
             instrucao = (
-                "Analise o PAJ abaixo e **decida autonomamente** (sem me perguntar) "
-                "entre uma das tres opcoes:\n\n"
-                "1. **DESPACHO de mero expediente** — vista ao MPF, aguardando distribuicao, "
-                "intimacao simples sem demanda ativa, sem resultado produzido ainda.\n"
-                "2. **ARQUIVAMENTO** — um destes tres casos (ver `/skills/arquivamento/SKILL.md`):\n"
-                "   a. **Tipo 1** — irrecorribilidade (decisao monocratica do Presidente TNU, art. 15 §1o RI-TNU).\n"
-                "   b. **Tipo 2** — inviabilidade de merito (jurisprudencia consolidada contra, sem distinguishing).\n"
-                "   c. **Tipo 3** — VITORIA JA OBTIDA (acordao favoravel transitado, acordo cumprido, "
-                "resultado atingido). NAO confundir com despacho: se a DPU ja ganhou e so resta baixa burocratica, "
-                "e arquivamento por vitoria (com remessa ao Defensor de 1a categoria na Turma Recursal/1o grau), "
-                "NAO despacho de aguardar. Essa e uma falha comum — sempre que ha vitoria ja cumprida, e Tipo 3.\n"
-                "3. **RECURSO** — decisao desfavoravel com recurso cabivel e viavel.\n\n"
-                "**OBRIGATORIO em TODOS os casos**: produzir o TEXTO da peca/despacho, em linguagem "
-                "juridica apropriada, pronto pra Joao colar no SISDPU. Nao basta dizer 'e mero expediente' — "
-                "redija o despacho mesmo que tenha 3 linhas (ex: 'Tomo ciencia... Aguardar manifestacao do MPF').\n\n"
-                "**ESFORCO PROPORCIONAL**:\n"
-                f"- **Despacho**: salve o texto em `{paj_pasta}\\despacho.txt` (so TXT, sem DOCX/PDF, sem validacao pesada). Texto curto e direto.\n"
-                f"- **Arquivamento**: skill arquivamento, salve em `{paj_pasta}\\`. SE for peca formal, rode validacao + formatar_peca.py.\n"
-                f"- **Recurso**: peca completa em `{paj_pasta}\\`, com validacao anti-alucinacao + formatar_peca.py gerando DOCX/PDF.\n\n"
-                "Ao final, apresente um **RESUMO ESTRUTURADO**:\n\n"
-                "```\n"
-                "## Decisao: [DESPACHO | ARQUIVAMENTO | RECURSO — <tipo>]\n\n"
-                "### Justificativa\n"
-                "<3-5 linhas explicando POR QUE>\n\n"
-                "### Texto da peca/despacho\n"
-                "```\n"
-                "<TEXTO COMPLETO DA PECA/DESPACHO aqui, formatado, pronto pra copiar>\n"
-                "```\n\n"
-                "### Arquivos gerados\n"
-                "- <caminho absoluto do arquivo .txt/.docx/.pdf gerado>\n\n"
-                "### Pontos-chave\n"
-                "- <bullet 1>\n"
-                "- <bullet 2>\n\n"
-                "### Se discordar\n"
-                "Me diga o que mudar e eu refaco.\n"
-                "```\n\n"
-                "Se eu responder com discordancia, refaca conforme instruido.\n\n"
-                "---\n\n"
-                f"{prompt_content}"
+                "Voce e o assistente juridico da DPU. JP e Defensor Publico Federal Cat. Especial (TNU + STJ, previdenciario).\n\n"
+                "## ARQUITETURA DO SISTEMA\n"
+                "- **Grok** (rodando neste M4) toma as decisoes de atuacao automaticamente 4x/dia.\n"
+                "- **Voce (Claude)** atua como revisor e corretor: JP conversa com voce pra discutir a decisao do Grok, "
+                "apontar erros e ensinar o sistema.\n"
+                "- **Arquivo de regras**: `" + str(regras_path) + "` — voce pode editar DIRETAMENTE (sem SSH) "
+                "para corrigir o comportamento do Grok nas proximas runs.\n\n"
+                "## SUA FUNCAO NESTA CONVERSA\n"
+                "1. Revisar a decisao do Grok (abaixo) e explicar seu raciocinio se JP perguntar.\n"
+                "2. Se JP apontar um erro: entender a correcao, editar `regras_atuacao.md` "
+                "com uma nova regra (secao `## Tema`, ERRO COMUM, REALIDADE, REGRA, Origem: JP correcao <data>).\n"
+                "3. Se JP pedir refazer a peca/despacho: execute — mesma logica de sempre "
+                f"(despacho → `{paj_pasta}/despacho.txt`; recurso → peca completa com formatar_peca.py).\n"
+                "4. NUNCA invente citacao, numero de processo ou jurisprudencia.\n\n"
+                + atuacao_resumo +
+                "\n---\n\n"
+                "## CONTEXTO COMPLETO DO PAJ\n"
+                + prompt_content
             )
             # NAO fecha stdin — mantem aberto pra multi-turn
             self.status = "running"
