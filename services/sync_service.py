@@ -396,18 +396,25 @@ def health() -> dict[str, object]:
     if cached and now - float(_HEALTH_CACHE["ts"]) < _HEALTH_CACHE_TTL:
         return cached  # type: ignore[return-value]
 
-    pc_state_file = os.path.join(_pc_state_dir(), "pajs_processados.json")
-    pc_mtime = os.path.getmtime(pc_state_file) if os.path.exists(pc_state_file) else None
-    pc_age = (now - pc_mtime) if pc_mtime else None
+    if IS_M4:
+        pc_state_file = None
+        pc_mtime = None
+        pc_age = None
+        pc_status = "n/a"
+    else:
+        pc_state_file = os.path.join(_pc_state_dir(), "pajs_processados.json")
+        pc_mtime = os.path.getmtime(pc_state_file) if os.path.exists(pc_state_file) else None
+        pc_age = (now - pc_mtime) if pc_mtime else None
+        pc_status = _classify_age(pc_age)
 
     m4 = _m4_last_cron_run()
     m4_mtime = m4.get("log_mtime_epoch") if m4.get("reachable") else None
     m4_age = (now - float(m4_mtime)) if m4_mtime else None
 
-    pc_status = _classify_age(pc_age)
     m4_status = _classify_age(m4_age) if m4.get("reachable") else "error"
-    overall = "error" if "error" in (pc_status, m4_status) else (
-        "warning" if "warning" in (pc_status, m4_status) else "ok"
+    statuses = [s for s in (pc_status, m4_status) if s != "n/a"]
+    overall = "error" if "error" in statuses else (
+        "warning" if "warning" in statuses else "ok"
     )
 
     data: dict[str, object] = {
