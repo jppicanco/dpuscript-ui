@@ -239,6 +239,15 @@ async def baixar_do_m4(token: str | None = None) -> AsyncGenerator[str, None]:
     Diferente de "atualizar_agora" (que faz SSH + roda pipeline + sync).
     Esse só faz sync.
     """
+    if IS_M4:
+        # A UI roda DENTRO do M4 — o workspace já é local. Não há o que
+        # "baixar de si mesmo". Tentar scp aqui só geraria erro (caminho
+        # Windows inexistente). Sync é instantâneo: os dados já estão aqui.
+        yield "Rodando no M4 — workspace já é local, nada a baixar.\n"
+        yield "Os dados que a UI mostra já são os mais recentes do M4.\n"
+        _release_token(token)
+        return
+
     yield "Sync M4 → PC (sem rodar pipeline — pega o que M4 já tem)\n\n"
 
     # 1. Estado
