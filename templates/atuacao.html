@@ -65,6 +65,11 @@
             <input type="checkbox" class="checkbox checkbox-sm" x-model="soComPrazo">
             <span class="label-text text-sm">Só com prazo</span>
         </label>
+        <select class="select select-bordered select-sm" x-model="ordem">
+            <option value="prioridade">Ordem: prioridade (recursos 1º)</option>
+            <option value="data_asc">Ordem: data (antigo → novo)</option>
+            <option value="data_desc">Ordem: data (novo → antigo)</option>
+        </select>
     </div>
 
     <!-- Lista -->
@@ -83,6 +88,8 @@
                         <span class="badge badge-ghost badge-xs" x-text="a.foro"></span>
                         <span class="text-sm text-base-content/80" x-text="a.assistido"></span>
                         <span class="ml-auto flex items-center gap-2">
+                            <span x-show="a.data_caixa" class="text-xs text-base-content/50 font-mono"
+                                  x-text="a.data_caixa"></span>
                             <span x-show="a.prazo && a.prazo !== 'n/a'"
                                   class="badge badge-sm badge-warning" x-text="'prazo: '+a.prazo"></span>
                             <span x-show="a.confianca" class="badge badge-xs badge-outline"
@@ -157,6 +164,7 @@ function atuacaoApp() {
         filtroStatus: '',
         busca: '',
         soComPrazo: false,
+        ordem: 'prioridade',
 
         async init() { await this.carregar(); setInterval(() => this.carregar(true), 30000); },
 
@@ -191,7 +199,22 @@ function atuacaoApp() {
                     (a.paj||'').toLowerCase().includes(q) ||
                     (a.resumo||'').toLowerCase().includes(q));
             }
-            // ordena: recursos primeiro, depois com prazo, depois resto
+            // ordenação cronológica por data_caixa (DD/MM/YYYY).
+            // Converte pra YYYYMMDD pra comparar como data de verdade, não texto.
+            if (this.ordem === 'data_asc' || this.ordem === 'data_desc') {
+                const k = s => {
+                    const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(s || '');
+                    return m ? m[3] + m[2] + m[1] : '00000000';
+                };
+                const dir = this.ordem === 'data_asc' ? 1 : -1;
+                return [...l].sort((a, b) => {
+                    const ka = k(a.data_caixa), kb = k(b.data_caixa);
+                    if (ka < kb) return -dir;
+                    if (ka > kb) return dir;
+                    return 0;
+                });
+            }
+            // default: recursos primeiro, depois por prazo
             const peso = t => t === 'RECURSO' ? 0 : t === 'ARQUIVAMENTO' ? 1 : t === 'DESPACHO' ? 2 : 3;
             return [...l].sort((a, b) => {
                 const pa = peso(a.tipo), pb = peso(b.tipo);
