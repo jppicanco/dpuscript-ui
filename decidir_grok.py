@@ -68,7 +68,14 @@ DECISAO_SCHEMA = {
         # preenchidos só quando tipo=RECURSO (kit de recurso pro Claude):
         "recurso_tipo":       {"type": "string"},
         "teses_sugeridas":    {"type": "array", "items": {"type": "string"}},
-        "pecas_chave":        {"type": "array", "items": {"type": "string"}},
+        "pecas_chave":        {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "arquivo":   {"type": "string"},
+                "descricao": {"type": "string"},
+            },
+            "required": ["arquivo", "descricao"],
+        }},
     },
 }
 
@@ -225,7 +232,7 @@ Sua tarefa: DECIDIR a atuação deste PAJ. Leia de trás pra frente: a movimenta
 ## KIT DE RECURSO (preencher SOMENTE se tipo=RECURSO)
 Quando o caso for RECURSO, além dos campos normais, preencha:
 - `recurso_tipo`: qual recurso cabe (agravo interno, embargos de declaração, REsp, AREsp, RE, memoriais, embargos de divergência).
-- `pecas_chave`: lista com os NOMES EXATOS (da lista acima) das peças mais importantes pra fundamentar o recurso — a decisão recorrida, o acórdão, o PUIL/recurso anterior, a sentença, etc. Só os nomes, sem inventar.
+- `pecas_chave`: as peças PRINCIPAIS pro recurso (seja generoso — inclua todas as relevantes: decisão recorrida, acórdão da TR, sentença, PUIL/recurso anterior, contrarrazões, laudo pericial etc.; deixe de fora só o irrelevante). Para CADA uma, dois campos: `arquivo` (nome EXATO da lista acima, sem inventar) e `descricao` (o que é a peça, pra o Claude saber se precisa ler — ex.: "Acórdão da Turma Recursal que negou provimento ao recurso inominado", "Decisão monocrática do Presidente da TNU inadmitindo o PUIL", "Sentença de 1º grau de improcedência").
 - `teses_sugeridas`: hipóteses de tese recursal, como SUGESTÕES. IMPORTANTE: são apenas pistas pra adiantar o raciocínio — NÃO são vinculantes. Quem decide a estratégia é o Claude (mais preciso), que poderá escolher uma delas, combiná-las, criar uma tese nova não listada ou recusar todas. Levante 2 a 4 hipóteses plausíveis com base na decisão recorrida, sem se alongar.
 
 ## TAMANHO DO DESPACHO — SEJA INTELIGENTE
@@ -331,7 +338,7 @@ def _salvar_prod(paj: str, pasta: Path, d: dict) -> None:
     # kit de recurso: dossiê pro Claude redigir (M4 adianta o trabalho factual)
     if tipo == "RECURSO":
         (pasta / "preparo_recurso.md").write_text(
-            _montar_preparo_recurso(d, paj, pasta), encoding="utf-8"
+            _montar_preparo_recurso(d, paj), encoding="utf-8"
         )
 
 
@@ -340,20 +347,24 @@ def _salvar_prod(paj: str, pasta: Path, d: dict) -> None:
 WIN_PAJ_ROOT = r"E:\DPU\dpu-workspace\Entrada\dpuscript"
 
 
-def _montar_preparo_recurso(d: dict, paj: str, pasta: Path) -> str:
+def _montar_preparo_recurso(d: dict, paj: str) -> str:
     """Monta o dossiê de recurso (kit pro Claude). Teses são NÃO-VINCULANTES.
-    Inclui os CAMINHOS COMPLETOS (Windows) de TODOS os arquivos que o Claude
-    vai abrir — peças-chave em destaque + todas as peças do processo."""
+    Lista as peças PRINCIPAIS (com caminho Windows completo + descrição do que
+    é cada uma) pro Claude decidir o que precisa ler."""
     def _lista(itens):
         itens = [str(x).strip() for x in (itens or []) if str(x).strip()]
         return "\n".join(f"- {x}" for x in itens) or "- (nenhuma)"
 
-    base        = f"{WIN_PAJ_ROOT}\\{paj}"
-    pecas_nomes = [str(x).strip() for x in (d.get("pecas_chave") or []) if str(x).strip()]
-    pecas_paths = "\n".join(f"- {base}\\peças\\{n}" for n in pecas_nomes) \
-                  or "- (Grok não destacou — ver lista completa abaixo)"
-    todas       = _listar_pecas(pasta)
-    todas_paths = "\n".join(f"- {base}\\peças\\{n}" for n in todas) or "- (nenhuma peça)"
+    base   = f"{WIN_PAJ_ROOT}\\{paj}"
+    linhas = []
+    for p in (d.get("pecas_chave") or []):
+        if isinstance(p, dict):
+            arq, desc = str(p.get("arquivo", "")).strip(), str(p.get("descricao", "")).strip()
+        else:
+            arq, desc = str(p).strip(), ""
+        if arq:
+            linhas.append(f"- {base}\\peças\\{arq}" + (f"  —  {desc}" if desc else ""))
+    pecas_paths = "\n".join(linhas) or f"- (ver peças em {base}\\peças\\)"
     teses       = _lista(d.get("teses_sugeridas"))
     return f"""# Kit de recurso — preparado pelo Grok (M4) para o Claude redigir
 
@@ -375,11 +386,10 @@ def _montar_preparo_recurso(d: dict, paj: str, pasta: Path) -> str:
 Pasta do PAJ: {base}
 Contexto consolidado: {base}\\PROMPT_MAX.md
 
-Peças-chave indicadas pelo Grok (prioritárias):
+Peças principais (cada uma com o que é — abra conforme a tese que escolher):
 {pecas_paths}
 
-Todas as peças do processo:
-{todas_paths}
+Demais peças do processo, se precisar de algo além: {base}\\peças\\
 
 ## Teses sugeridas pelo Grok — NÃO-VINCULANTES
 > ATENÇÃO, Claude: as teses abaixo são apenas pistas levantadas pelo Grok pra adiantar
