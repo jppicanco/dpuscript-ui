@@ -206,7 +206,8 @@ Sua tarefa: DECIDIR a atuação deste PAJ. Leia de trás pra frente: a movimenta
 - **NAO_ATUAR** — nada a fazer.
 
 ## REGRAS PROCESSUAIS
-- TNU/STJ/JEF: SEM dobra DPU. Dias úteis. +10d ciência ficta e-Proc.
+- TNU/STJ/JEF: SEM dobra DPU. Prazo em DIAS ÚTEIS.
+- **CÁLCULO DE PRAZO (e-Proc — SEMPRE aplicar):** a intimação eletrônica só é considerada ABERTA após **10 DIAS CORRIDOS** da disponibilização (ciência ficta no 10º dia corrido, se não consultada antes). SÓ DEPOIS disso começam a correr os DIAS ÚTEIS do prazo recursal. Portanto: data da disponibilização + 10 dias corridos = início; a partir do 1º dia útil seguinte, conte os dias úteis do prazo (agravo interno/ED = 15 dias úteis na TNU/STJ, sem dobra). Informe a DATA-LIMITE resultante no campo `prazo`. NUNCA conte os dias úteis a partir da disponibilização sem somar os 10 corridos.
 - Monocrática do RELATOR desfavorável → agravo interno. Monocrática do PRESIDENTE TNU → em regra IRRECORRÍVEL (no máx ED). Colegiada → ED só se vício; pode caber REsp/RE.
 - NUNCA invente citação/jurisprudência/número.
 
