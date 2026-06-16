@@ -331,18 +331,30 @@ def _salvar_prod(paj: str, pasta: Path, d: dict) -> None:
     # kit de recurso: dossiê pro Claude redigir (M4 adianta o trabalho factual)
     if tipo == "RECURSO":
         (pasta / "preparo_recurso.md").write_text(
-            _montar_preparo_recurso(d), encoding="utf-8"
+            _montar_preparo_recurso(d, paj, pasta), encoding="utf-8"
         )
 
 
-def _montar_preparo_recurso(d: dict) -> str:
-    """Monta o dossiê de recurso (kit pro Claude). Teses são NÃO-VINCULANTES."""
+# Raiz das pastas de PAJ NO WINDOWS — o Claude que redige o recurso roda lá e
+# precisa abrir os arquivos por caminho absoluto. M4 e Windows ficam em sync.
+WIN_PAJ_ROOT = r"E:\DPU\dpu-workspace\Entrada\dpuscript"
+
+
+def _montar_preparo_recurso(d: dict, paj: str, pasta: Path) -> str:
+    """Monta o dossiê de recurso (kit pro Claude). Teses são NÃO-VINCULANTES.
+    Inclui os CAMINHOS COMPLETOS (Windows) de TODOS os arquivos que o Claude
+    vai abrir — peças-chave em destaque + todas as peças do processo."""
     def _lista(itens):
         itens = [str(x).strip() for x in (itens or []) if str(x).strip()]
         return "\n".join(f"- {x}" for x in itens) or "- (nenhuma)"
 
-    pecas  = _lista(d.get("pecas_chave"))
-    teses  = _lista(d.get("teses_sugeridas"))
+    base        = f"{WIN_PAJ_ROOT}\\{paj}"
+    pecas_nomes = [str(x).strip() for x in (d.get("pecas_chave") or []) if str(x).strip()]
+    pecas_paths = "\n".join(f"- {base}\\peças\\{n}" for n in pecas_nomes) \
+                  or "- (Grok não destacou — ver lista completa abaixo)"
+    todas       = _listar_pecas(pasta)
+    todas_paths = "\n".join(f"- {base}\\peças\\{n}" for n in todas) or "- (nenhuma peça)"
+    teses       = _lista(d.get("teses_sugeridas"))
     return f"""# Kit de recurso — preparado pelo Grok (M4) para o Claude redigir
 
 > Dossiê factual montado automaticamente. As teses são SUGESTÕES não-vinculantes.
@@ -359,8 +371,15 @@ def _montar_preparo_recurso(d: dict) -> str:
 ## O que fazer
 {d.get('o_que_fazer', '').strip() or '(não informado)'}
 
-## Peças-chave separadas (na pasta peças/ do PAJ)
-{pecas}
+## ARQUIVOS DO PROCESSO (caminhos completos — abrir no Claude)
+Pasta do PAJ: {base}
+Contexto consolidado: {base}\\PROMPT_MAX.md
+
+Peças-chave indicadas pelo Grok (prioritárias):
+{pecas_paths}
+
+Todas as peças do processo:
+{todas_paths}
 
 ## Teses sugeridas pelo Grok — NÃO-VINCULANTES
 > ATENÇÃO, Claude: as teses abaixo são apenas pistas levantadas pelo Grok pra adiantar

@@ -126,29 +126,24 @@
                         <p class="text-sm" x-text="a.alertas"></p>
                     </div>
 
-                    <!-- Kit de recurso (só RECURSO) -->
+                    <!-- Kit de recurso (só RECURSO) — UM botão copia tudo -->
                     <div x-show="a.tipo === 'RECURSO' && a.preparo_recurso"
-                         class="mt-2 p-2 rounded border border-error/40 bg-error/5">
-                        <div class="flex items-center justify-between gap-2">
+                         class="mt-2 p-3 rounded border border-error/40 bg-error/5">
+                        <div class="flex items-center justify-between gap-2 flex-wrap">
                             <span class="text-xs uppercase font-semibold" style="color:#b91c1c">
-                                🗂 Kit de recurso (preparado pelo M4 — teses são sugestões; Claude decide)
+                                🗂 Kit de recurso — tudo pronto pro Claude
+                                <span x-show="a.recurso_tipo" class="normal-case opacity-70" x-text="'· ' + a.recurso_tipo"></span>
                             </span>
-                            <button class="btn btn-xs btn-error btn-outline"
-                                    @click="copiarDossie(a.preparo_recurso, $event)">📋 Copiar dossiê p/ Claude</button>
+                            <button class="btn btn-sm btn-error"
+                                    @click="copiarDossie(a.preparo_recurso, $event)">
+                                📋 Copiar tudo p/ Claude
+                            </button>
                         </div>
-                        <p x-show="a.recurso_tipo" class="text-xs mt-1">
-                            <span class="opacity-60">Recurso cabível:</span> <span x-text="a.recurso_tipo"></span>
+                        <p class="text-xs opacity-60 mt-1">
+                            Um clique copia resumo, fatos, fundamento, teses (sugestões) e os caminhos completos de todos os arquivos. Cole no Claude Code com Ctrl+V.
                         </p>
-                        <div x-show="a.pecas_chave && a.pecas_chave.length" class="mt-1 flex flex-wrap gap-1 items-center">
-                            <span class="text-xs opacity-60">Peças-chave:</span>
-                            <template x-for="p in a.pecas_chave" :key="p">
-                                <a class="badge badge-outline badge-xs hover:bg-base-300"
-                                   :href="'/files/'+a.paj_norm+'/'+encodeURIComponent('peças')+'/'+encodeURIComponent(p)"
-                                   target="_blank" x-text="p"></a>
-                            </template>
-                        </div>
                         <details class="mt-1">
-                            <summary class="text-xs cursor-pointer opacity-70">ver dossiê completo</summary>
+                            <summary class="text-xs cursor-pointer opacity-70">prévia do dossiê</summary>
                             <pre class="text-xs bg-base-300 rounded p-2 whitespace-pre-wrap mt-1 max-h-60 overflow-y-auto" x-text="a.preparo_recurso"></pre>
                         </details>
                     </div>
