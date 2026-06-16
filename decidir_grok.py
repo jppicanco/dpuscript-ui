@@ -34,6 +34,7 @@ WORKSPACE   = Path("/Users/macmini/dpu-workspace")
 ENTRADA     = WORKSPACE / "Entrada" / "dpuscript"
 REGRAS_FILE = WORKSPACE / "dpuscript" / "memory" / "regras_atuacao.md"
 LOG_FILE    = WORKSPACE / "dpuscript" / "decidir_grok.log"
+ESTADO_FILE = WORKSPACE / "dpuscript" / "estado" / "pajs_processados.json"
 
 HERMES        = Path.home() / ".hermes/hermes-agent/venv/bin/hermes"
 GROK_MODEL    = "grok-4.20-0309-reasoning"
@@ -263,6 +264,9 @@ def _salvar_prod(paj: str, pasta: Path, d: dict) -> None:
         "etapa":              "decisao",
         "modelo":             GROK_MODEL,
         "concluido_em":       agora,
+        # movimento da caixa que esta decisão analisou — se chegar movimento
+        # novo depois, _precisa_decisao detecta e re-analisa.
+        "decidido_mov_hash":  _mov_hash_atual(pasta),
     }
     (pasta / "atuacao.json").write_text(
         json.dumps(atuacao, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -287,10 +291,57 @@ def _status_atual(pasta: Path) -> str:
     return _ler_json(pasta / "atuacao.json").get("status", "")
 
 
+def _mov_hash_atual(pasta: Path) -> str:
+    """mov_hash do movimento que está HOJE na caixa (fonte: estado central)."""
+    paj = pasta.name.replace("-", "/", 1)  # 2026-039-06814 -> 2026/039-06814
+    try:
+        est = json.loads(ESTADO_FILE.read_text(encoding="utf-8"))
+        return est.get("pajs", {}).get(paj, {}).get("mov_hash", "")
+    except Exception:
+        return ""
+
+
+def _data_br(s: str):
+    """Parse DD/MM/YYYY ou ISO (YYYY-MM-DD...) -> date, ou None."""
+    s = (s or "")[:10]
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return dt.datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+    return None
+
+
+def _movimento_apos_decisao(pasta: Path, at: dict) -> bool:
+    """Fallback p/ atuacao.json antigo (sem decidido_mov_hash): True se a data
+    do movimento na caixa é POSTERIOR à data da decisão — i.e., chegou algo
+    novo depois que decidimos."""
+    meta = _ler_json(pasta / "metadata.json")
+    d_mov = _data_br(meta.get("data_mov_caixa", ""))
+    d_dec = _data_br(at.get("concluido_em", ""))
+    return bool(d_mov and d_dec and d_mov > d_dec)
+
+
 def _precisa_decisao(pasta: Path) -> bool:
-    """True se o PAJ ainda não tem decisão válida."""
-    return _status_atual(pasta) not in ("done", "recurso_pendente",
-                                         "decidindo", "redigindo_recurso")
+    """True se o PAJ precisa (re)decisão.
+
+    Decide quando: (a) ainda não há decisão; ou (b) já há decisão mas chegou
+    movimento NOVO na caixa depois dela (ex.: despacho 'aguardar julgamento'
+    e depois a TNU efetivamente julga). Nunca interrompe trabalho em curso.
+    """
+    at = _ler_json(pasta / "atuacao.json")
+    status = at.get("status", "")
+    if status in ("decidindo", "redigindo_recurso"):
+        return False
+    if status not in ("done", "recurso_pendente"):
+        return True
+    # já decidido — re-decide se o movimento mudou desde a decisão
+    cur = _mov_hash_atual(pasta)
+    dec = at.get("decidido_mov_hash", "")
+    if cur and dec:
+        return cur != dec
+    # atuacao.json antigo (sem o campo): usa a data do movimento como fallback
+    return _movimento_apos_decisao(pasta, at)
 
 
 # ---------------------------------------------------------------------------
