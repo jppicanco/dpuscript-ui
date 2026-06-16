@@ -24,6 +24,35 @@ function showToast(msg, type) {
     }, 3000);
 }
 
+/* Copia texto pra área de transferência.
+ * navigator.clipboard só existe em contexto seguro (HTTPS ou localhost).
+ * A UI roda em http://192.168.0.102:8001 (HTTP via IP da LAN), onde a API
+ * fica indisponível — por isso o fallback com textarea + execCommand.
+ * Retorna Promise<bool>. */
+async function copiarTexto(txt) {
+    txt = txt == null ? '' : String(txt);
+    if (navigator.clipboard && window.isSecureContext) {
+        try { await navigator.clipboard.writeText(txt); return true; }
+        catch (e) { /* cai no fallback abaixo */ }
+    }
+    try {
+        var ta = document.createElement('textarea');
+        ta.value = txt;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, txt.length);
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch (e) {
+        return false;
+    }
+}
+
 /* HTMX global event handlers */
 document.addEventListener('htmx:responseError', function(evt) {
     showToast('Erro na requisicao: ' + evt.detail.xhr.status, 'error');

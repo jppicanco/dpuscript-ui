@@ -1077,10 +1077,8 @@ function copiarPrompt() {
     var el = document.getElementById('prompt-content');
     if (!el) return;
     var text = el.innerText || el.textContent;
-    navigator.clipboard.writeText(text).then(function() {
-        showToast('PROMPT_MAX copiado', 'success');
-    }).catch(function() {
-        showToast('Erro ao copiar', 'error');
+    copiarTexto(text).then(function(ok) {
+        showToast(ok ? 'PROMPT_MAX copiado' : 'Erro ao copiar', ok ? 'success' : 'error');
     });
 }
 
@@ -1114,8 +1112,8 @@ async function verTxt(pajNorm, caminho, titulo) {
 function copiarTxt() {
     const el = document.getElementById('txt-modal-content');
     if (!el) return;
-    navigator.clipboard.writeText(el.textContent).then(() => {
-        showToast('Copiado', 'success');
+    copiarTexto(el.textContent).then((ok) => {
+        showToast(ok ? 'Copiado' : 'Erro ao copiar', ok ? 'success' : 'error');
     });
 }
 

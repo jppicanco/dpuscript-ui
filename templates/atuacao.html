@@ -233,11 +233,15 @@ function atuacaoApp() {
             return {pendente:'PENDENTE', erro:'ERRO', timeout:'TIMEOUT', rodando:'ANALISANDO'}[s] || '';
         },
 
-        copiar(txt, ev) {
-            navigator.clipboard.writeText(txt).then(() => {
+        async copiar(txt, ev) {
+            const ok = await copiarTexto(txt);
+            if (ok) {
                 showToast('Movimentação copiada', 'success');
-                if (ev && ev.target) { const o = ev.target.textContent; ev.target.textContent='✓ copiado'; setTimeout(()=>ev.target.textContent=o, 1500); }
-            });
+                const btn = ev && (ev.currentTarget || ev.target);
+                if (btn) { const o = btn.textContent; btn.textContent='✓ copiado'; setTimeout(()=>btn.textContent=o, 1500); }
+            } else {
+                showToast('Não consegui copiar — selecione o texto e copie manualmente', 'error');
+            }
         },
 
         async discutir(pajNorm) { await abrirChatLivre(pajNorm); },
