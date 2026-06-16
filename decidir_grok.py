@@ -35,6 +35,7 @@ ENTRADA     = WORKSPACE / "Entrada" / "dpuscript"
 REGRAS_FILE = WORKSPACE / "dpuscript" / "memory" / "regras_atuacao.md"
 LOG_FILE    = WORKSPACE / "dpuscript" / "decidir_grok.log"
 ESTADO_FILE = WORKSPACE / "dpuscript" / "estado" / "pajs_processados.json"
+MODELO_ARQ_FILE = WORKSPACE / "dpuscript" / "memory" / "modelo_arquivamento.md"
 
 HERMES        = Path.home() / ".hermes/hermes-agent/venv/bin/hermes"
 GROK_MODEL    = "grok-4.20-0309-reasoning"
@@ -167,6 +168,8 @@ def montar_prompt_decisao(paj_norm: str, pasta: Path) -> str:
     decisao, arq = _decisao_recente(pasta)
     regras       = _ler(REGRAS_FILE)
     bloco_regras = f"\n\n## REGRAS APRENDIDAS (correções do Defensor — RESPEITE)\n{regras}\n" if regras.strip() else ""
+    modelo_arq   = _ler(MODELO_ARQ_FILE)
+    bloco_modelo = f"\n\n## MODELO DE ARQUIVAMENTO (siga à risca quando tipo=ARQUIVAMENTO)\n{modelo_arq}\n" if modelo_arq.strip() else ""
     schema_str   = json.dumps(DECISAO_SCHEMA, ensure_ascii=False, indent=2)
 
     return f"""Você é o assistente jurídico da DPU. JP é Defensor Público Federal Cat. Especial, atua TNU + STJ (previdenciário).
@@ -200,20 +203,24 @@ Sua tarefa: DECIDIR a atuação deste PAJ. Leia de trás pra frente: a movimenta
 ### DOCUMENTOS RELEVANTES ({arq or 'nenhum'})
 {decisao or '(sem documento de decisão)'}
 
-## DESPACHO COMPLETO (para DESPACHO e ARQUIVAMENTO)
-O campo `movimentacao` NÃO é uma frase curta. É um DESPACHO COMPLETO, no padrão do Defensor — fundamentado, técnico, impessoal, em terceira pessoa. Texto corrido pronto pra colar no SISDPU (sem markdown, sem títulos, sem saudação, sem "Excelentíssimo"). Estruture em três partes encadeadas:
+## TAMANHO DO DESPACHO — SEJA INTELIGENTE
+O campo `movimentacao` é o texto pronto pra colar no SISDPU: texto corrido, sem markdown, sem saudação, sem "Excelentíssimo", sem data/nome/cargo ao final. O TAMANHO depende do caso:
 
-1. RELATÓRIO — identifique o assistido, o processo (nº CNJ), a matéria previdenciária em discussão e o histórico processual essencial até a movimentação mais recente (quem decidiu o quê e quando). Sintético, mas suficiente pra entender o caso sem abrir os autos.
-2. FUNDAMENTAÇÃO — analise a decisão/movimentação mais recente e explique POR QUE a providência é despacho ou arquivamento. Cite a base normativa pertinente (artigos do RITNU, súmulas TNU/STJ, dispositivos da Lei 10.259/2001 ou do CPC) SOMENTE quando constar dos autos ou for regra notória da matéria. Quando arquivar por irrecorribilidade, explicite o fundamento (ex.: monocrática do Presidente da TNU, art. 15, V, do RITNU). NUNCA invente número de precedente, súmula, artigo ou processo — se não tiver certeza, descreva sem citar número.
-3. CONCLUSÃO — a providência objetiva e assertiva: arquivar; aguardar julgamento; dar ciência; comunicar o ofício de origem; anotar o decurso/prazo. Inclua a data do decurso quando houver.
+- TRÂMITE SIMPLES (DESPACHO) → texto CURTO, 1 a 3 frases. Ex.: intimação da data de audiência/sessão de julgamento (informe a data/hora marcada e que se aguarda), vista ao MPF, mero expediente, abertura de PAJ, mera ciência, decurso. NÃO encha de fundamentação o que é simples.
+- DESPACHO DE MÉRITO / sobrestamento / situação que exija justificar a conduta → fundamentado: relatório breve + razão + conclusão.
+- ARQUIVAMENTO → SEMPRE completo e bem motivado. Tem que explicar POR QUE se arquiva e POR QUE não cabe mais recurso. Siga o "MODELO DE ARQUIVAMENTO" abaixo conforme o tipo (1 = monocrática do Presidente da TNU; 2 = inviabilidade caso a caso; 3 = vitória).
 
-Extensão: o necessário pra ficar completo (tipicamente 2 a 5 parágrafos). Qualidade acima de brevidade.
-
+REGRAS DE PRECISÃO (valem sempre):
+- NUNCA invente número de precedente, súmula, artigo ou processo. Use só o que consta dos autos/decisão ou do modelo/regras deste prompt.
+- NÃO cite o NOME do Ministro/Presidente — escreva apenas "o Presidente da TNU" / "a Presidência da TNU".
+- Monocrática do Presidente da TNU é irrecorrível por força do art. 15, §1º, do RI-TNU (NÃO "art. 15, V"; NÃO cabe agravo interno — no máximo ED).
+{bloco_modelo}
 ## SAÍDA OBRIGATÓRIA
 Responda SOMENTE um objeto JSON válido, sem texto antes ou depois, sem markdown (sem ```). Siga exatamente este schema:
 {schema_str}
 
-Para DESPACHO/ARQUIVAMENTO: campo `movimentacao` traz o DESPACHO COMPLETO descrito acima (não uma frase). Campo `resumo` segue curto (uma linha do que é o PAJ).
+Para DESPACHO: `movimentacao` segue a regra de TAMANHO acima (curto p/ trâmite simples; fundamentado p/ mérito). Campo `resumo` sempre curto (uma linha do que é o PAJ).
+Para ARQUIVAMENTO: `movimentacao` traz o despacho COMPLETO conforme o MODELO DE ARQUIVAMENTO. `resumo` curto.
 Para NAO_ATUAR: `movimentacao` pode ser breve.
 Para RECURSO: `movimentacao` traz a movimentação de juntada e `precisa_aprofundar`=true.
 """
@@ -364,6 +371,7 @@ def main() -> int:
     ap.add_argument("--only",         help="processar só este PAJ")
     ap.add_argument("--limit",        type=int, default=0)
     ap.add_argument("--force",        action="store_true", help="reprocessa mesmo quem já tem decisão")
+    ap.add_argument("--so-tipos",     help="filtra PAJs cujo tipo atual está na lista (ex: DESPACHO,ARQUIVAMENTO)")
     ap.add_argument("--compare-only", action="store_true", help="relatório Grok vs Opus (piloto)")
     args = ap.parse_args()
 
@@ -374,6 +382,11 @@ def main() -> int:
 
     if args.only:
         pajs = [p for p in pajs if p == args.only]
+
+    if args.so_tipos:
+        alvos_t = {t.strip().upper() for t in args.so_tipos.split(",") if t.strip()}
+        pajs = [p for p in pajs
+                if _ler_json(ENTRADA / p / "atuacao.json").get("tipo", "").upper() in alvos_t]
 
     # --- modo comparação (piloto) ---
     if args.compare_only:
