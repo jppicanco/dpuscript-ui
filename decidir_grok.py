@@ -200,11 +200,21 @@ Sua tarefa: DECIDIR a atuação deste PAJ. Leia de trás pra frente: a movimenta
 ### DOCUMENTOS RELEVANTES ({arq or 'nenhum'})
 {decisao or '(sem documento de decisão)'}
 
+## DESPACHO COMPLETO (para DESPACHO e ARQUIVAMENTO)
+O campo `movimentacao` NÃO é uma frase curta. É um DESPACHO COMPLETO, no padrão do Defensor — fundamentado, técnico, impessoal, em terceira pessoa. Texto corrido pronto pra colar no SISDPU (sem markdown, sem títulos, sem saudação, sem "Excelentíssimo"). Estruture em três partes encadeadas:
+
+1. RELATÓRIO — identifique o assistido, o processo (nº CNJ), a matéria previdenciária em discussão e o histórico processual essencial até a movimentação mais recente (quem decidiu o quê e quando). Sintético, mas suficiente pra entender o caso sem abrir os autos.
+2. FUNDAMENTAÇÃO — analise a decisão/movimentação mais recente e explique POR QUE a providência é despacho ou arquivamento. Cite a base normativa pertinente (artigos do RITNU, súmulas TNU/STJ, dispositivos da Lei 10.259/2001 ou do CPC) SOMENTE quando constar dos autos ou for regra notória da matéria. Quando arquivar por irrecorribilidade, explicite o fundamento (ex.: monocrática do Presidente da TNU, art. 15, V, do RITNU). NUNCA invente número de precedente, súmula, artigo ou processo — se não tiver certeza, descreva sem citar número.
+3. CONCLUSÃO — a providência objetiva e assertiva: arquivar; aguardar julgamento; dar ciência; comunicar o ofício de origem; anotar o decurso/prazo. Inclua a data do decurso quando houver.
+
+Extensão: o necessário pra ficar completo (tipicamente 2 a 5 parágrafos). Qualidade acima de brevidade.
+
 ## SAÍDA OBRIGATÓRIA
 Responda SOMENTE um objeto JSON válido, sem texto antes ou depois, sem markdown (sem ```). Siga exatamente este schema:
 {schema_str}
 
-Para DESPACHO/ARQUIVAMENTO/NAO_ATUAR: campo `movimentacao` traz o texto pronto pro SISDPU.
+Para DESPACHO/ARQUIVAMENTO: campo `movimentacao` traz o DESPACHO COMPLETO descrito acima (não uma frase). Campo `resumo` segue curto (uma linha do que é o PAJ).
+Para NAO_ATUAR: `movimentacao` pode ser breve.
 Para RECURSO: `movimentacao` traz a movimentação de juntada e `precisa_aprofundar`=true.
 """
 
