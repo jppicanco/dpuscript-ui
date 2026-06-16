@@ -68,6 +68,7 @@ def listar_atuacoes() -> list[dict]:
             continue
         paj_norm = pasta.name
         atuacao = _ler_json(pasta / "atuacao.json") or {}
+        cm = _ler_json(pasta / "concluido_manual.json") or {}
         arquivos = _listar_arquivos_gerados(pasta)
 
         det = meta.get("detalhes_sisdpu", {}) or {}
@@ -92,9 +93,41 @@ def listar_atuacoes() -> list[dict]:
             "alertas": atuacao.get("alertas", ""),
             "movimentacao": atuacao.get("movimentacao", ""),
             "concluido_em": atuacao.get("concluido_em", ""),
+            # marcador manual "já concluí no SIS" (independe da reconciliação)
+            "concluido_manual": bool(cm.get("em")),
+            "concluido_manual_em": cm.get("em", ""),
             "arquivos": arquivos,
         })
     return out
+
+
+def _marker_path(paj_norm: str) -> Path:
+    return ENTRADA_DIR / paj_norm / "concluido_manual.json"
+
+
+def concluir_manual(paj_norm: str) -> dict | None:
+    """Marca o PAJ como concluído manualmente pelo JP (já despachado no SIS).
+    Não mexe na peça nem no atuacao.json; só grava um marcador."""
+    pasta = ENTRADA_DIR / paj_norm
+    if not pasta.is_dir():
+        return None
+    from datetime import datetime, timezone
+    em = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    _marker_path(paj_norm).write_text(
+        json.dumps({"em": em}, ensure_ascii=False), encoding="utf-8"
+    )
+    return {"paj_norm": paj_norm, "concluido_manual": True, "concluido_manual_em": em}
+
+
+def reabrir_manual(paj_norm: str) -> dict | None:
+    """Desfaz a conclusão manual (remove o marcador)."""
+    pasta = ENTRADA_DIR / paj_norm
+    if not pasta.is_dir():
+        return None
+    mp = _marker_path(paj_norm)
+    if mp.exists():
+        mp.unlink()
+    return {"paj_norm": paj_norm, "concluido_manual": False}
 
 
 def atuacao_paj(paj_norm: str) -> dict | None:
@@ -103,11 +136,14 @@ def atuacao_paj(paj_norm: str) -> dict | None:
         return None
     meta = _ler_json(pasta / "metadata.json") or {}
     atuacao = _ler_json(pasta / "atuacao.json") or {}
+    cm = _ler_json(pasta / "concluido_manual.json") or {}
     return {
         "paj_norm": paj_norm,
         "paj": meta.get("paj", _norm_to_paj(paj_norm)),
         "assistido": meta.get("assistido_caixa", ""),
         **atuacao,
+        "concluido_manual": bool(cm.get("em")),
+        "concluido_manual_em": cm.get("em", ""),
         "arquivos": _listar_arquivos_gerados(pasta),
     }
 
@@ -117,14 +153,18 @@ def resumo_batch() -> dict:
     ats = listar_atuacoes()
     por_status: dict[str, int] = {}
     por_tipo: dict[str, int] = {}
+    concluidos_manual = 0
     for a in ats:
         s = a["atuacao_status"]
         por_status[s] = por_status.get(s, 0) + 1
         t = a.get("tipo") or "—"
         if a["atuacao_status"] == "done":
             por_tipo[t] = por_tipo.get(t, 0) + 1
+        if a.get("concluido_manual"):
+            concluidos_manual += 1
     return {
         "total": len(ats),
         "por_status": por_status,
         "por_tipo": por_tipo,
+        "concluidos_manual": concluidos_manual,
     }

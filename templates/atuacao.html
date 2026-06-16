@@ -30,6 +30,9 @@
         <div class="badge badge-lg badge-error" x-show="(resumo.por_status && (resumo.por_status.erro||resumo.por_status.timeout)) || 0">
             Falhas: <span class="ml-1 font-bold" x-text="((resumo.por_status&&resumo.por_status.erro)||0)+((resumo.por_status&&resumo.por_status.timeout)||0)"></span>
         </div>
+        <div class="badge badge-lg badge-success" x-show="(resumo.concluidos_manual||0) > 0">
+            ✓ Concluídos no SIS: <span class="ml-1 font-bold" x-text="resumo.concluidos_manual||0"></span>
+        </div>
         <div class="divider divider-horizontal mx-0"></div>
         <div class="badge badge-lg" style="background:#7f1d1d;color:#fff" x-show="(resumo.por_tipo && resumo.por_tipo.RECURSO) || 0">
             Recursos: <span class="ml-1 font-bold" x-text="(resumo.por_tipo && resumo.por_tipo.RECURSO) || 0"></span>
@@ -65,6 +68,10 @@
             <input type="checkbox" class="checkbox checkbox-sm" x-model="soComPrazo">
             <span class="label-text text-sm">Só com prazo</span>
         </label>
+        <label class="label cursor-pointer gap-2">
+            <input type="checkbox" class="checkbox checkbox-sm" x-model="mostrarConcluidos">
+            <span class="label-text text-sm">Mostrar concluídos</span>
+        </label>
         <select class="select select-bordered select-sm" x-model="ordem">
             <option value="prioridade">Ordem: prioridade (recursos 1º)</option>
             <option value="data_asc">Ordem: data (antigo → novo)</option>
@@ -76,6 +83,7 @@
     <div class="space-y-3">
         <template x-for="a in filtrados" :key="a.paj_norm">
             <div class="card bg-base-200 shadow-sm border-l-4"
+                 :class="{'opacity-60': a.concluido_manual}"
                  :style="'border-left-color:' + corTipo(a.tipo)">
                 <div class="card-body p-4">
 
@@ -140,9 +148,15 @@
                     </div>
 
                     <!-- Ações -->
-                    <div class="card-actions justify-end mt-1">
+                    <div class="card-actions justify-end mt-1 items-center">
+                        <span x-show="a.concluido_manual" class="badge badge-success badge-sm mr-auto"
+                              x-text="'✓ concluído no SIS' + (a.concluido_manual_em ? ' · ' + a.concluido_manual_em.slice(8,10)+'/'+a.concluido_manual_em.slice(5,7)+' '+a.concluido_manual_em.slice(11,16) : '')"></span>
                         <a class="btn btn-xs btn-ghost" :href="'/paj/'+a.paj_norm">Abrir PAJ</a>
                         <button class="btn btn-xs btn-ghost" @click="discutir(a.paj_norm)">Discutir</button>
+                        <button x-show="!a.concluido_manual" class="btn btn-xs btn-success"
+                                @click="concluir(a.paj_norm)">✓ Concluí no SIS</button>
+                        <button x-show="a.concluido_manual" class="btn btn-xs btn-ghost"
+                                @click="reabrir(a.paj_norm)">↩ Reabrir</button>
                     </div>
                 </div>
             </div>
@@ -164,6 +178,7 @@ function atuacaoApp() {
         filtroStatus: '',
         busca: '',
         soComPrazo: false,
+        mostrarConcluidos: false,
         ordem: 'prioridade',
 
         async init() { await this.carregar(); setInterval(() => this.carregar(true), 30000); },
@@ -189,6 +204,7 @@ function atuacaoApp() {
 
         get filtrados() {
             let l = this.atuacoes;
+            if (!this.mostrarConcluidos) l = l.filter(a => !a.concluido_manual);
             if (this.filtroTipo) l = l.filter(a => a.tipo === this.filtroTipo);
             if (this.filtroStatus) l = l.filter(a => a.atuacao_status === this.filtroStatus);
             if (this.soComPrazo) l = l.filter(a => a.prazo && a.prazo !== 'n/a' && a.prazo !== '');
@@ -242,6 +258,29 @@ function atuacaoApp() {
             } else {
                 showToast('Não consegui copiar — selecione o texto e copie manualmente', 'error');
             }
+        },
+
+        async concluir(pajNorm) {
+            try {
+                const r = await fetch('/api/atuacao/' + pajNorm + '/concluir', {method: 'POST'});
+                if (!r.ok) throw new Error('falhou');
+                const d = await r.json();
+                const a = this.atuacoes.find(x => x.paj_norm === pajNorm);
+                if (a) { a.concluido_manual = true; a.concluido_manual_em = d.concluido_manual_em; }
+                if (this.resumo) this.resumo.concluidos_manual = (this.resumo.concluidos_manual || 0) + 1;
+                showToast('Marcado como concluído no SIS', 'success');
+            } catch (e) { showToast('Erro ao marcar concluído', 'error'); }
+        },
+
+        async reabrir(pajNorm) {
+            try {
+                const r = await fetch('/api/atuacao/' + pajNorm + '/reabrir', {method: 'POST'});
+                if (!r.ok) throw new Error('falhou');
+                const a = this.atuacoes.find(x => x.paj_norm === pajNorm);
+                if (a) { a.concluido_manual = false; a.concluido_manual_em = ''; }
+                if (this.resumo && this.resumo.concluidos_manual) this.resumo.concluidos_manual -= 1;
+                showToast('Reaberto', 'info');
+            } catch (e) { showToast('Erro ao reabrir', 'error'); }
         },
 
         async discutir(pajNorm) { await abrirChatLivre(pajNorm); },
