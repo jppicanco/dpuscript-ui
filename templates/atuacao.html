@@ -126,6 +126,33 @@
                         <p class="text-sm" x-text="a.alertas"></p>
                     </div>
 
+                    <!-- Kit de recurso (só RECURSO) -->
+                    <div x-show="a.tipo === 'RECURSO' && a.preparo_recurso"
+                         class="mt-2 p-2 rounded border border-error/40 bg-error/5">
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="text-xs uppercase font-semibold" style="color:#b91c1c">
+                                🗂 Kit de recurso (preparado pelo M4 — teses são sugestões; Claude decide)
+                            </span>
+                            <button class="btn btn-xs btn-error btn-outline"
+                                    @click="copiarDossie(a.preparo_recurso, $event)">📋 Copiar dossiê p/ Claude</button>
+                        </div>
+                        <p x-show="a.recurso_tipo" class="text-xs mt-1">
+                            <span class="opacity-60">Recurso cabível:</span> <span x-text="a.recurso_tipo"></span>
+                        </p>
+                        <div x-show="a.pecas_chave && a.pecas_chave.length" class="mt-1 flex flex-wrap gap-1 items-center">
+                            <span class="text-xs opacity-60">Peças-chave:</span>
+                            <template x-for="p in a.pecas_chave" :key="p">
+                                <a class="badge badge-outline badge-xs hover:bg-base-300"
+                                   :href="'/files/'+a.paj_norm+'/'+encodeURIComponent('peças')+'/'+encodeURIComponent(p)"
+                                   target="_blank" x-text="p"></a>
+                            </template>
+                        </div>
+                        <details class="mt-1">
+                            <summary class="text-xs cursor-pointer opacity-70">ver dossiê completo</summary>
+                            <pre class="text-xs bg-base-300 rounded p-2 whitespace-pre-wrap mt-1 max-h-60 overflow-y-auto" x-text="a.preparo_recurso"></pre>
+                        </details>
+                    </div>
+
                     <!-- Movimentação (copiar) -->
                     <div x-show="a.movimentacao" class="mt-1">
                         <div class="flex items-center justify-between">
@@ -281,6 +308,13 @@ function atuacaoApp() {
                 if (this.resumo && this.resumo.concluidos_manual) this.resumo.concluidos_manual -= 1;
                 showToast('Reaberto', 'info');
             } catch (e) { showToast('Erro ao reabrir', 'error'); }
+        },
+
+        async copiarDossie(txt, ev) {
+            const ok = await copiarTexto(txt);
+            showToast(ok ? 'Dossiê copiado — cole no Claude' : 'Erro ao copiar', ok ? 'success' : 'error');
+            const btn = ev && (ev.currentTarget || ev.target);
+            if (btn && ok) { const o = btn.textContent; btn.textContent='✓ copiado'; setTimeout(()=>btn.textContent=o, 1500); }
         },
 
         async discutir(pajNorm) { await abrirChatLivre(pajNorm); },

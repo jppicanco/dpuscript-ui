@@ -96,9 +96,21 @@ def listar_atuacoes() -> list[dict]:
             # marcador manual "já concluí no SIS" (independe da reconciliação)
             "concluido_manual": bool(cm.get("em")),
             "concluido_manual_em": cm.get("em", ""),
+            # kit de recurso (só RECURSO): dossiê pronto pro Claude
+            "recurso_tipo": atuacao.get("recurso_tipo", ""),
+            "pecas_chave": atuacao.get("pecas_chave", []),
+            "preparo_recurso": (_ler_texto(pasta / "preparo_recurso.md")
+                                if atuacao.get("tipo") == "RECURSO" else ""),
             "arquivos": arquivos,
         })
     return out
+
+
+def _ler_texto(p: Path) -> str:
+    try:
+        return p.read_text(encoding="utf-8") if p.exists() else ""
+    except Exception:
+        return ""
 
 
 def _marker_path(paj_norm: str) -> Path:

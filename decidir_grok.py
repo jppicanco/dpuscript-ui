@@ -65,6 +65,10 @@ DECISAO_SCHEMA = {
         "alertas":            {"type": "string"},
         "movimentacao":       {"type": "string"},
         "precisa_aprofundar": {"type": "boolean"},
+        # preenchidos só quando tipo=RECURSO (kit de recurso pro Claude):
+        "recurso_tipo":       {"type": "string"},
+        "teses_sugeridas":    {"type": "array", "items": {"type": "string"}},
+        "pecas_chave":        {"type": "array", "items": {"type": "string"}},
     },
 }
 
@@ -91,6 +95,16 @@ def _ler(p: Path, limite: int | None = None) -> str:
         return t[:limite] if limite else t
     except Exception:
         return ""
+
+
+def _listar_pecas(pasta: Path) -> list[str]:
+    """Nomes das peças .txt em peças/ (pro Grok apontar as peças-chave do recurso)."""
+    sub = pasta / "peças"
+    if not sub.is_dir():
+        sub = pasta / "pecas"
+    if not sub.is_dir():
+        return []
+    return sorted(f.name for f in sub.iterdir() if f.suffix.lower() == ".txt")
 
 
 def _ler_json(p: Path) -> dict:
@@ -170,6 +184,8 @@ def montar_prompt_decisao(paj_norm: str, pasta: Path) -> str:
     bloco_regras = f"\n\n## REGRAS APRENDIDAS (correções do Defensor — RESPEITE)\n{regras}\n" if regras.strip() else ""
     modelo_arq   = _ler(MODELO_ARQ_FILE)
     bloco_modelo = f"\n\n## MODELO DE ARQUIVAMENTO (siga à risca quando tipo=ARQUIVAMENTO)\n{modelo_arq}\n" if modelo_arq.strip() else ""
+    pecas_lista  = _listar_pecas(pasta)
+    pecas_txt    = "\n".join(f"  - {n}" for n in pecas_lista) or "  (nenhuma peça localizada)"
     schema_str   = json.dumps(DECISAO_SCHEMA, ensure_ascii=False, indent=2)
 
     return f"""Você é o assistente jurídico da DPU. JP é Defensor Público Federal Cat. Especial, atua TNU + STJ (previdenciário).
@@ -202,6 +218,15 @@ Sua tarefa: DECIDIR a atuação deste PAJ. Leia de trás pra frente: a movimenta
 
 ### DOCUMENTOS RELEVANTES ({arq or 'nenhum'})
 {decisao or '(sem documento de decisão)'}
+
+### PEÇAS DISPONÍVEIS NA PASTA (use estes nomes em pecas_chave)
+{pecas_txt}
+
+## KIT DE RECURSO (preencher SOMENTE se tipo=RECURSO)
+Quando o caso for RECURSO, além dos campos normais, preencha:
+- `recurso_tipo`: qual recurso cabe (agravo interno, embargos de declaração, REsp, AREsp, RE, memoriais, embargos de divergência).
+- `pecas_chave`: lista com os NOMES EXATOS (da lista acima) das peças mais importantes pra fundamentar o recurso — a decisão recorrida, o acórdão, o PUIL/recurso anterior, a sentença, etc. Só os nomes, sem inventar.
+- `teses_sugeridas`: hipóteses de tese recursal, como SUGESTÕES. IMPORTANTE: são apenas pistas pra adiantar o raciocínio — NÃO são vinculantes. Quem decide a estratégia é o Claude (mais preciso), que poderá escolher uma delas, combiná-las, criar uma tese nova não listada ou recusar todas. Levante 2 a 4 hipóteses plausíveis com base na decisão recorrida, sem se alongar.
 
 ## TAMANHO DO DESPACHO — SEJA INTELIGENTE
 O campo `movimentacao` é o texto pronto pra colar no SISDPU: texto corrido, sem markdown, sem saudação, sem "Excelentíssimo", sem data/nome/cargo ao final. O TAMANHO depende do caso:
@@ -284,6 +309,10 @@ def _salvar_prod(paj: str, pasta: Path, d: dict) -> None:
         # movimento da caixa que esta decisão analisou — se chegar movimento
         # novo depois, _precisa_decisao detecta e re-analisa.
         "decidido_mov_hash":  _mov_hash_atual(pasta),
+        # kit de recurso (vazio quando não é RECURSO):
+        "recurso_tipo":       d.get("recurso_tipo", ""),
+        "teses_sugeridas":    d.get("teses_sugeridas", []),
+        "pecas_chave":        d.get("pecas_chave", []),
     }
     (pasta / "atuacao.json").write_text(
         json.dumps(atuacao, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -298,6 +327,51 @@ def _salvar_prod(paj: str, pasta: Path, d: dict) -> None:
     # despacho pronto pra colar
     if tipo != "RECURSO" and d.get("movimentacao"):
         (pasta / "despacho.txt").write_text(d["movimentacao"], encoding="utf-8")
+
+    # kit de recurso: dossiê pro Claude redigir (M4 adianta o trabalho factual)
+    if tipo == "RECURSO":
+        (pasta / "preparo_recurso.md").write_text(
+            _montar_preparo_recurso(d), encoding="utf-8"
+        )
+
+
+def _montar_preparo_recurso(d: dict) -> str:
+    """Monta o dossiê de recurso (kit pro Claude). Teses são NÃO-VINCULANTES."""
+    def _lista(itens):
+        itens = [str(x).strip() for x in (itens or []) if str(x).strip()]
+        return "\n".join(f"- {x}" for x in itens) or "- (nenhuma)"
+
+    pecas  = _lista(d.get("pecas_chave"))
+    teses  = _lista(d.get("teses_sugeridas"))
+    return f"""# Kit de recurso — preparado pelo Grok (M4) para o Claude redigir
+
+> Dossiê factual montado automaticamente. As teses são SUGESTÕES não-vinculantes.
+
+## Resumo do caso
+{d.get('resumo', '').strip() or '(sem resumo)'}
+
+## Decisão recorrida (fundamento)
+{d.get('fundamento_decisao', '').strip() or '(não informado)'}
+
+## Recurso cabível
+{d.get('recurso_tipo', '').strip() or '(avaliar)'} — Prazo: {d.get('prazo', '').strip() or '(verificar)'}
+
+## O que fazer
+{d.get('o_que_fazer', '').strip() or '(não informado)'}
+
+## Peças-chave separadas (na pasta peças/ do PAJ)
+{pecas}
+
+## Teses sugeridas pelo Grok — NÃO-VINCULANTES
+> ATENÇÃO, Claude: as teses abaixo são apenas pistas levantadas pelo Grok pra adiantar
+> o raciocínio. Você NÃO está preso a elas. Avalie criticamente e decida a melhor
+> estratégia — pode escolher uma, combiná-las, desenvolver uma tese NOVA não listada
+> aqui, ou recusar todas. A estratégia recursal é SUA decisão, com sua maior precisão.
+{teses}
+
+## Movimentação de juntada (p/ SISDPU após protocolar)
+{d.get('movimentacao', '').strip() or '(gerar na juntada)'}
+"""
 
 
 # ---------------------------------------------------------------------------
