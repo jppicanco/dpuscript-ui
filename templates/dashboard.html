@@ -9,7 +9,8 @@
         <div>
             <h2 class="text-2xl font-bold">Caixa de Entrada</h2>
             <p class="text-sm text-base-content/60 mt-1">
-                <span x-text="pajs.length"></span> PAJs
+                <span x-text="pajs.length"></span> PAJs únicos
+                <span class="tooltip tooltip-bottom cursor-help" data-tip="O SISDPU lista TRÂMITES (linhas) — o mesmo PAJ pode aparecer em 2+ linhas, então o número lá costuma ser maior. Aqui contamos PAJs únicos. Use 'Verificar caixa' pra conferir.">ⓘ</span>
                 <span x-show="ultimaExecucao" class="ml-2">
                     — pipeline rodou em <span x-text="ultimaExecucao" class="text-primary"></span>
                 </span>
@@ -47,22 +48,15 @@
         </div>
         <div class="flex gap-2 items-center">
             <button class="btn btn-success btn-sm tooltip tooltip-left"
-                    data-tip="~30-60s. So verifica caixa SISDPU e remove PAJs ja concluidos. NAO baixa pecas. Use sempre que concluir PAJ no SISDPU."
-                    onclick="runPipeline('/api/sync/reconciliar', 'Reconciliar caixa (rapido)')">
-                Reconciliar caixa
-            </button>
-            <button class="btn btn-primary btn-sm tooltip tooltip-left"
-                    data-tip="~30s. rsync M4 → PC sem rodar pipeline. M4 ja roda pipeline 4x/dia (8h15, 12h30, 17h30, 21h00). Pega o que ele ja preparou."
-                    onclick="runPipeline('/api/sync/baixar-do-m4', 'Baixar do M4')">
-                Baixar do M4
+                    data-tip="~30-60s. Busca a caixa REAL do SISDPU agora e compara: remove PAJs ja concluidos (orfaos) e avisa se ha PAJs novos a processar. Use pra conferir se esta tela bate com o SISDPU neste momento."
+                    onclick="runPipeline('/api/sync/reconciliar', 'Verificar caixa contra o SISDPU agora')">
+                Verificar caixa (SISDPU)
             </button>
             <details class="dropdown dropdown-end">
                 <summary class="btn btn-ghost btn-sm">⋯</summary>
                 <ul class="menu dropdown-content bg-base-200 rounded-box z-10 w-72 p-2 shadow-lg">
-                    <li><a class="tooltip tooltip-left" data-tip="~5-20min. Forca M4 rodar pipeline agora (fora do cron). Use quando precisa atualizado JA."
+                    <li><a class="tooltip tooltip-left" data-tip="~5-20min. Forca o M4 rodar o pipeline completo agora (fora do cron): baixa PAJs novos + pecas + reconcilia. Use quando a verificacao acusar PAJs novos."
                            onclick="runPipeline('/api/sync/atualizar', 'Forcar pipeline M4 agora')">Forçar pipeline M4 agora</a></li>
-                    <li><a class="tooltip tooltip-left" data-tip="~5-20min. Roda pipeline LOCAL no PC. Use SO se M4 indisponivel."
-                           onclick="runPipeline('/api/pipeline/run', 'Pipeline local (fallback)')">Local (fallback)</a></li>
                 </ul>
             </details>
         </div>
@@ -341,6 +335,19 @@ function dashboardApp() {
             return [...new Set(this.pajs.map(p => p.classificacao))].sort();
         },
 
+        // Converte valor de campo numa chave ordenável.
+        // data_caixa vem como "DD/MM/YYYY" — comparar como texto poe "29/05"
+        // depois de "12/06" (29 > 12). Converte pra "YYYYMMDD" pra ordenar
+        // cronologicamente de verdade.
+        chaveOrdem(valor, campo) {
+            if (campo === 'data_caixa') {
+                const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(valor || '');
+                if (m) return m[3] + m[2] + m[1];  // YYYYMMDD
+                return '00000000';  // sem data vai pro fim (asc)
+            }
+            return (typeof valor === 'string') ? valor.toLowerCase() : (valor || '');
+        },
+
         aplicarFiltros() {
             let lista = this.pajs;
             if (this.filtroForo) {
@@ -359,10 +366,8 @@ function dashboardApp() {
             }
             // Ordenacao
             lista = [...lista].sort((a, b) => {
-                let va = a[this.ordemCampo] || '';
-                let vb = b[this.ordemCampo] || '';
-                if (typeof va === 'string') va = va.toLowerCase();
-                if (typeof vb === 'string') vb = vb.toLowerCase();
+                let va = this.chaveOrdem(a[this.ordemCampo], this.ordemCampo);
+                let vb = this.chaveOrdem(b[this.ordemCampo], this.ordemCampo);
                 if (va < vb) return this.ordemAsc ? -1 : 1;
                 if (va > vb) return this.ordemAsc ? 1 : -1;
                 return 0;
