@@ -388,6 +388,13 @@ def _montar_prompt_inicial(paj_norm: str, skill_slug: str | None) -> str:
         "1. Entender o erro e confirmar o que e' correto — pesquise via MCP "
         "`bnp-api`/`cjf-jurisprudencia` se for questao juridica. NUNCA invente "
         "citacao/sumula/tema/numero.\n"
+        "1b. **INTERROGUE o Grok sobre a RAIZ do erro antes de gravar a regra.** "
+        "O Grok decidiu este PAJ; voce nao sabe o raciocinio real dele — descubra "
+        "em vez de deduzir. Rode via Bash (este chat roda no M4):\n"
+        f"   `python3 /Users/macmini/dpu-workspace/dpuscript-ui/consultar_grok.py --paj {paj_norm} --pergunta \"<sua pergunta>\"`\n"
+        "   Pergunte por que ele concluiu o que concluiu, em que trecho se baseou, "
+        "que premissa o levou ao erro. Use a resposta para escrever uma regra que "
+        "ataca a CAUSA (nao so o sintoma deste PAJ). Pergunte quantas vezes precisar.\n"
         "2. **ENSINAR o Grok a nao repetir**: registre a correcao como REGRA em "
         "`/Users/macmini/dpu-workspace/dpuscript/memory/regras_atuacao.md` (arquivo "
         "que o Grok le a CADA rodada), seguindo a skill "
@@ -435,6 +442,7 @@ class ChatLivreSession:
             "--input-format", "stream-json",
             "--include-partial-messages",
             "--permission-mode", "bypassPermissions",
+            "--model", "claude-sonnet-4-6",
         ]
         # Remove env vars de sessao Claude pai pra evitar
         # "Claude Code cannot be launched inside another Claude Code session".
