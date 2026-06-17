@@ -98,7 +98,9 @@
                         <span class="ml-auto flex items-center gap-2">
                             <span x-show="a.data_caixa" class="text-xs text-base-content/50 font-mono"
                                   x-text="a.data_caixa"></span>
-                            <span x-show="a.prazo && a.prazo !== 'n/a'"
+                            <span x-show="a.tipo === 'RECURSO' && a.prazo && a.prazo !== 'n/a'"
+                                  class="badge badge-error gap-1 font-bold" x-text="'⏰ prazo: '+a.prazo"></span>
+                            <span x-show="a.tipo !== 'RECURSO' && a.prazo && a.prazo !== 'n/a'"
                                   class="badge badge-sm badge-warning" x-text="'prazo: '+a.prazo"></span>
                             <span x-show="a.confianca" class="badge badge-xs badge-outline"
                                   x-text="'confiança: '+a.confianca"></span>

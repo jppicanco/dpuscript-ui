@@ -43,6 +43,7 @@ def listar_pajs() -> list[dict]:
 
         paj_id = metadata.get("paj", paj_norm.replace("-", "/", 1))
         estado_paj = pajs_estado.get(paj_id, {})
+        atuacao = _ler_json(pasta / "atuacao.json") or {}
 
         # Conta arquivos
         pecas_dir = pasta / "peças"
@@ -72,6 +73,8 @@ def listar_pajs() -> list[dict]:
             "data_caixa": metadata.get("data_mov_caixa", ""),
             "desc_caixa": metadata.get("desc_mov_caixa", ""),
             "processo_judicial": metadata.get("processo_judicial", ""),
+            "tipo": atuacao.get("tipo", ""),
+            "prazo": atuacao.get("prazo", ""),
             "n_pecas": n_pecas,
             "n_decisoes": n_decisoes,
             "ultima_preparacao": estado_paj.get("ultima_preparacao", ""),
