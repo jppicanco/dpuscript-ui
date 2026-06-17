@@ -110,6 +110,22 @@
                         </span>
                     </div>
 
+                    <!-- Alerta: movimento novo no SISDPU posterior ao despacho -->
+                    <div x-show="a.alerta_movimento" class="mt-2 p-2 rounded border-l-4"
+                         :class="a.alerta_decisorio ? 'bg-error/10 border-error' : 'bg-warning/10 border-warning'">
+                        <div class="flex items-center gap-2">
+                            <span class="font-bold" x-text="a.alerta_decisorio ? '🔴' : '⚠️'"></span>
+                            <span class="text-sm font-semibold"
+                                  x-text="(a.alerta_decisorio ? 'Decisão/arquivamento novo no processo' : 'Movimentação nova no processo')
+                                          + (a.alerta_movs_novas ? ' ('+a.alerta_movs_novas+' desde seu despacho)' : '')"></span>
+                        </div>
+                        <p class="text-xs text-base-content/70 mt-1"
+                           x-text="(a.alerta_data ? a.alerta_data+' — ' : '') + a.alerta_desc"></p>
+                        <p class="text-xs text-base-content/50 italic mt-0.5">
+                            O despacho abaixo pode estar desatualizado — verifique no SISDPU se ainda precisa atuar.
+                        </p>
+                    </div>
+
                     <!-- Resumo -->
                     <div x-show="a.resumo" class="mt-1">
                         <span class="text-xs uppercase text-base-content/50 font-semibold">O que é</span>

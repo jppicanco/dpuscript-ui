@@ -69,6 +69,7 @@ def listar_atuacoes() -> list[dict]:
         paj_norm = pasta.name
         atuacao = _ler_json(pasta / "atuacao.json") or {}
         cm = _ler_json(pasta / "concluido_manual.json") or {}
+        alerta = _ler_json(pasta / "alerta_movimento.json") or {}
         arquivos = _listar_arquivos_gerados(pasta)
 
         det = meta.get("detalhes_sisdpu", {}) or {}
@@ -96,6 +97,12 @@ def listar_atuacoes() -> list[dict]:
             # marcador manual "já concluí no SIS" (independe da reconciliação)
             "concluido_manual": bool(cm.get("em")),
             "concluido_manual_em": cm.get("em", ""),
+            # alerta de movimento novo no SISDPU posterior ao despacho (sensor_movimento)
+            "alerta_movimento": bool(alerta.get("tem_alerta")),
+            "alerta_decisorio": bool(alerta.get("decisorio")),
+            "alerta_movs_novas": alerta.get("movs_novas", 0),
+            "alerta_data": alerta.get("mov_data", ""),
+            "alerta_desc": alerta.get("mov_desc", ""),
             # kit de recurso (só RECURSO): dossiê pronto pro Claude
             "recurso_tipo": atuacao.get("recurso_tipo", ""),
             "pecas_chave": atuacao.get("pecas_chave", []),
