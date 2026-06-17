@@ -102,6 +102,10 @@
 
         <!-- Footer -->
         <div class="p-4 border-t border-base-300 text-xs text-base-content/40">
+            <button onclick="reautenticarM4()" class="btn btn-xs btn-ghost w-full mb-2"
+                    title="Gera o link pra reautenticar o Claude no M4 (quando o chat der erro 401)">
+                🔑 Reautenticar Claude (M4)
+            </button>
             <p>Defensoria Publica da Uniao</p>
             <p class="mt-1">v0.1.0</p>
         </div>
@@ -113,6 +117,44 @@
             {% block content %}{% endblock %}
         </div>
     </main>
+
+    <!-- Modal de reautenticação do Claude no M4 -->
+    <dialog id="reauth-modal" class="modal">
+        <div class="modal-box max-w-lg">
+            <h3 class="font-bold text-lg">🔑 Reautenticar Claude no M4</h3>
+            <p class="text-sm text-base-content/60 mt-1">
+                Gera um login de longa duração pro M4 — resolve o erro 401 do chat sem expirar.
+            </p>
+
+            <div id="reauth-step1" class="mt-4">
+                <button onclick="reauthGerarLink()" class="btn btn-primary btn-sm" id="reauth-btn-link">
+                    Gerar link de autorização
+                </button>
+                <p class="text-xs text-base-content/50 mt-2" id="reauth-msg1"></p>
+            </div>
+
+            <div id="reauth-step2" class="mt-4 hidden">
+                <p class="text-sm mb-1">1. Abra o link, faça login e <b>autorize</b>:</p>
+                <a id="reauth-link" href="#" target="_blank" rel="noopener"
+                   class="btn btn-outline btn-sm btn-block mb-1">🔗 Abrir link de autorização</a>
+                <p class="text-xs text-base-content/50 break-all mb-3" id="reauth-url"></p>
+                <p class="text-sm mb-1">2. Cole aqui o <b>código</b> que aparecer após autorizar:</p>
+                <div class="flex gap-2">
+                    <input id="reauth-codigo" class="input input-bordered input-sm flex-1"
+                           placeholder="código de autorização" />
+                    <button onclick="reauthEnviarCodigo()" class="btn btn-success btn-sm" id="reauth-btn-cod">
+                        Confirmar
+                    </button>
+                </div>
+                <p class="text-xs mt-2" id="reauth-msg2"></p>
+            </div>
+
+            <div class="modal-action">
+                <form method="dialog"><button class="btn btn-sm">Fechar</button></form>
+            </div>
+        </div>
+        <form method="dialog" class="modal-backdrop"><button>fechar</button></form>
+    </dialog>
 
     <!-- Toast container -->
     <div class="toast-container" id="toast-container"></div>

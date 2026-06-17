@@ -53,6 +53,53 @@ async function copiarTexto(txt) {
     }
 }
 
+/* Reautenticação do Claude no M4 (modal global em base.html) */
+function reautenticarM4() {
+    var s1 = document.getElementById('reauth-step1');
+    var s2 = document.getElementById('reauth-step2');
+    if (!s1) return;
+    s1.classList.remove('hidden'); s2.classList.add('hidden');
+    document.getElementById('reauth-msg1').textContent = '';
+    document.getElementById('reauth-msg2').textContent = '';
+    document.getElementById('reauth-codigo').value = '';
+    document.getElementById('reauth-modal').showModal();
+}
+async function reauthGerarLink() {
+    var b = document.getElementById('reauth-btn-link');
+    var msg = document.getElementById('reauth-msg1');
+    b.disabled = true; msg.textContent = 'Gerando link (até ~30s)…';
+    try {
+        var r = await fetch('/api/auth/m4/iniciar', {method: 'POST'});
+        var d = await r.json();
+        if (d.ok && d.url) {
+            document.getElementById('reauth-link').href = d.url;
+            document.getElementById('reauth-url').textContent = d.url;
+            document.getElementById('reauth-step1').classList.add('hidden');
+            document.getElementById('reauth-step2').classList.remove('hidden');
+        } else {
+            msg.textContent = 'Erro: ' + (d.erro || 'falhou');
+        }
+    } catch (e) { msg.textContent = 'Erro: ' + e; }
+    finally { b.disabled = false; }
+}
+async function reauthEnviarCodigo() {
+    var cod = document.getElementById('reauth-codigo').value;
+    var b = document.getElementById('reauth-btn-cod');
+    var msg = document.getElementById('reauth-msg2');
+    b.disabled = true; msg.textContent = 'Enviando…';
+    try {
+        var r = await fetch('/api/auth/m4/codigo', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({codigo: cod})
+        });
+        var d = await r.json();
+        msg.textContent = d.ok ? ('✓ ' + (d.msg || 'ok')) : ('Erro: ' + (d.erro || 'falhou'));
+        msg.className = 'text-xs mt-2 ' + (d.ok ? 'text-success' : 'text-error');
+        if (d.ok) showToast('Claude reautenticado no M4', 'success');
+    } catch (e) { msg.textContent = 'Erro: ' + e; }
+    finally { b.disabled = false; }
+}
+
 /* HTMX global event handlers */
 document.addEventListener('htmx:responseError', function(evt) {
     showToast('Erro na requisicao: ' + evt.detail.xhr.status, 'error');
